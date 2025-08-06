@@ -3,19 +3,28 @@ import google.generativeai as genai
 from datetime import datetime
 import json
 import re
-from db import db
-from models.user import User
+from db import chat_history_collection, tasks_collection, users_collection, db
 from models.task import Task
+from models.user import User
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 class AIAgent:
     def __init__(self):
-        # Configure Gemini AI
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        # Use the working model
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        # Initialize Gemini client
+        api_key = os.getenv('GEMINI_API_KEY')
+        if not api_key:
+            print("Warning: GEMINI_API_KEY not found in environment variables")
+            self.use_simulation = True
+        else:
+            genai.configure(api_key=api_key)
+            self.model = genai.GenerativeModel('gemini-pro')
+            self.use_simulation = False
         
-        # Get database collections
-        self.chat_sessions_collection = db["chat_sessions"]
+        # Use chat_history_collection instead of chat_sessions_collection
+        self.chat_history_collection = chat_history_collection
         
         self.system_prompt = """
         You are Rise AI, a helpful assistant for an employee task management system. 
@@ -42,276 +51,248 @@ class AIAgent:
         Always be professional, helpful, and concise. If you need more information, ask specific questions.
         """
     
-    def process_message(self, user_message, username):
+    def process_message(self, message, username):
+        """Process user message and return AI response"""
         try:
             # Get user context
             user = User.find_by_username(username)
             if not user:
-                return "User not found. Please register first."
+                return "I'm sorry, I couldn't find your user information. Please try logging in again."
             
-            # Check if user wants to create a task
-            if self._is_task_creation_request(user_message):
-                return self._handle_task_creation(user_message, username, user)
-            
-            # Check if user wants task status
-            elif self._is_task_status_request(user_message):
-                return self._handle_task_status_request(username, user)
-            
-            # Check if user wants task statistics (for managers)
-            elif self._is_statistics_request(user_message) and user['role'] == 'manager':
-                return self._handle_statistics_request()
-            
-            # General conversation
-            else:
-                return self._handle_general_conversation(user_message, username, user)
-                
-        except Exception as e:
-            return f"Sorry, I encountered an error: {str(e)}"
-    
-    def _is_task_creation_request(self, message):
-        """Check if the user wants to create a task"""
-        task_keywords = [
-            'create task', 'new task', 'add task', 'submit task',
-            'i need to', 'i have to', 'i want to create',
-            'can you help me create', 'make a task'
-        ]
-        message_lower = message.lower()
-        return any(keyword in message_lower for keyword in task_keywords)
-    
-    def _is_task_status_request(self, message):
-        """Check if user wants to see task status"""
-        status_keywords = [
-            'my tasks', 'task status', 'show tasks', 'view tasks',
-            'what are my tasks', 'task list', 'check tasks'
-        ]
-        message_lower = message.lower()
-        return any(keyword in message_lower for keyword in status_keywords)
-    
-    def _is_statistics_request(self, message):
-        """Check if user wants statistics"""
-        stats_keywords = [
-            'statistics', 'stats', 'overview', 'summary',
-            'team performance', 'dashboard', 'analytics'
-        ]
-        message_lower = message.lower()
-        return any(keyword in message_lower for keyword in stats_keywords)  # Fixed: was status_keywords
-    
-    def _handle_task_creation(self, user_message, username, user):
-        """Handle task creation requests"""
-        try:
-            # Try to extract task details from the message
-            task_details = self._extract_task_details(user_message)
-            
-            if task_details['title'] and task_details['description']:
-                # Create the task
-                task = Task(
-                    employee_username=username,
-                    title=task_details['title'],
-                    description=task_details['description'],
-                    priority=task_details['priority']
-                )
-                
-                result = Task.create_task(task.to_dict())
-                
-                if result.inserted_id:
-                    response = f"""✅ Task created successfully!
-
-**Task Details:**
-- **Title:** {task_details['title']}
-- **Description:** {task_details['description']}
-- **Priority:** {task_details['priority']}
-- **Status:** Pending
-
-Your task has been submitted and is now visible to managers."""
-                    
-                    # Save the interaction
-                    self.save_chat_session(username, user_message, response)
-                    return response
-                else:
-                    return "Sorry, there was an error creating your task. Please try again."
-            
-            else:
-                # Ask for missing details
-                return self._ask_for_task_details(task_details)
-                
-        except Exception as e:
-            return f"Error creating task: {str(e)}"
-    
-    def _extract_task_details(self, message):
-        """Extract task details from user message using AI"""
-        extraction_prompt = f"""
-        Extract task details from this message: "{message}"
-        
-        Return a JSON object with:
-        - title: string (main task title, if clear)
-        - description: string (task description, if clear)  
-        - priority: string (low/medium/high/urgent, default: medium)
-        
-        If title or description are not clear, set them as null.
-        Only return valid JSON.
-        """
-        
-        try:
-            response = self.model.generate_content(extraction_prompt)
-            # Try to parse JSON from response
-            json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
-            if json_match:
-                task_data = json.loads(json_match.group())
-                return {
-                    'title': task_data.get('title'),
-                    'description': task_data.get('description'),
-                    'priority': task_data.get('priority', 'medium')
-                }
-        except:
-            pass
-        
-        # Fallback: return empty details
-        return {'title': None, 'description': None, 'priority': 'medium'}
-    
-    def _ask_for_task_details(self, current_details):
-        """Ask user for missing task details"""
-        if not current_details['title']:
-            return "I'd be happy to help you create a task! What's the title or main goal of your task?"
-        elif not current_details['description']:
-            return f"Great! I have the title: '{current_details['title']}'. Can you provide more details about what needs to be done?"
-        else:
-            return "Please provide both a title and description for your task."
-    
-    def _handle_task_status_request(self, username, user):
-        """Handle requests to view task status"""
-        try:
+            # Get user's tasks for context
             user_tasks = Task.get_tasks_by_user(username)
             
-            if not user_tasks:
-                return "You don't have any tasks yet. Would you like to create one?"
+            # Build context for AI
+            context = self._build_context(user, user_tasks, message)
             
-            # Format tasks for display
-            response = f"📋 **Your Tasks ({len(user_tasks)} total):**\n\n"
+            # Get AI response
+            ai_response = self._get_ai_response(context, message)
             
-            for task in user_tasks[-5:]:  # Show last 5 tasks
-                status_emoji = {
-                    'pending': '🔄',
-                    'in_progress': '⏳',
-                    'completed': '✅',
-                    'cancelled': '❌'
-                }.get(task.get('status', 'pending'), '📝')  # Fixed: added .get() with default
-                
-                priority_emoji = {
-                    'low': '🟢',
-                    'medium': '🟡', 
-                    'high': '🟠',
-                    'urgent': '🔴'
-                }.get(task.get('priority', 'medium'), '🟡')  # Fixed: added .get() with default
-                
-                response += f"{status_emoji} **{task.get('title', 'Untitled')}**\n"
-                response += f"   {priority_emoji} Priority: {task.get('priority', 'medium').title()}\n"
-                response += f"   📅 Created: {task.get('created_at', 'Unknown').strftime('%Y-%m-%d %H:%M') if isinstance(task.get('created_at'), datetime) else 'Unknown'}\n"
-                response += f"   📊 Status: {task.get('status', 'pending').title()}\n\n"
-            
-            if len(user_tasks) > 5:
-                response += f"... and {len(user_tasks) - 5} more tasks.\n\n"
-            
-            # Add task statistics
-            stats = Task.get_user_task_statistics(username)
-            if stats:
-                response += "📊 **Your Task Summary:**\n"
-                for stat in stats:
-                    response += f"   {stat['_id'].title()}: {stat['count']}\n"
-            
-            self.save_chat_session(username, "Show my tasks", response)
-            return response
-            
-        except Exception as e:
-            return f"Error retrieving tasks: {str(e)}"
-    
-    def _handle_statistics_request(self):
-        """Handle statistics requests for managers"""
-        try:
-            all_stats = Task.get_task_statistics()
-            all_tasks = Task.get_all_tasks()
-            
-            response = "📊 **Team Task Overview:**\n\n"
-            
-            # Overall statistics
-            total_tasks = len(all_tasks)
-            response += f"📝 Total Tasks: {total_tasks}\n\n"
-            
-            if all_stats:
-                response += "**Status Breakdown:**\n"
-                for stat in all_stats:
-                    percentage = round((stat['count'] / total_tasks) * 100, 1)
-                    response += f"   {stat['_id'].title()}: {stat['count']} ({percentage}%)\n"
-            
-            # Recent tasks
-            if all_tasks:
-                response += "\n🕐 **Recent Tasks:**\n"
-                for task in all_tasks[:3]:
-                    response += f"   • {task.get('title', 'Untitled')} - {task.get('employee_username', 'Unknown')} ({task.get('status', 'pending')})\n"
-            
-            return response
-            
-        except Exception as e:
-            return f"Error retrieving statistics: {str(e)}"
-    
-    def _handle_general_conversation(self, user_message, username, user):
-        """Handle general conversation using AI"""
-        try:
-            # Get user's recent tasks for context
-            user_tasks = Task.get_tasks_by_user(username)
-            
-            # Build context-aware prompt
-            context = f"""
-            User: {user['full_name']} ({user['role']})
-            Active tasks: {len([t for t in user_tasks if t.get('status') in ['pending', 'in_progress']])}
-            Total tasks: {len(user_tasks)}
-            
-            User message: {user_message}
-            
-            Respond helpfully. If they need task management help, guide them appropriately.
-            """
-            
-            full_prompt = self.system_prompt + "\n\n" + context
-            
-            response = self.model.generate_content(full_prompt)
-            ai_response = response.text
-            
-            # Save chat session
-            self.save_chat_session(username, user_message, ai_response)
+            # Save conversation to history
+            self._save_conversation(username, message, ai_response)
             
             return ai_response
             
         except Exception as e:
-            return f"Sorry, I encountered an error: {str(e)}"
+            print(f"Error processing message: {str(e)}")
+            return "I apologize, but I encountered an error processing your request. Please try again."
     
-    def save_chat_session(self, username, user_message, ai_response):
-        """Save chat interaction to database"""
+    def _build_context(self, user, tasks, message):
+        """Build context for AI including user info and tasks"""
+        context = {
+            "user": {
+                "username": user["username"],
+                "full_name": user["full_name"],
+                "role": user["role"]
+            },
+            "tasks": {
+                "total": len(tasks),
+                "pending": len([t for t in tasks if t.get("status") == "pending"]),
+                "in_progress": len([t for t in tasks if t.get("status") == "in_progress"]),
+                "completed": len([t for t in tasks if t.get("status") == "completed"])
+            },
+            "current_message": message
+        }
+        return context
+    
+    def _get_ai_response(self, context, message):
+        """Get response from Gemini API or return simulated response"""
         try:
-            chat_data = {
+            # Build the prompt with context
+            full_prompt = self._build_prompt_with_context(context, message)
+            
+            if self.use_simulation:
+                print("Using simulated responses (Gemini API key not available)")
+                return self._generate_simulated_response(context, message)
+            
+            # Use Gemini API
+            response = self.model.generate_content(full_prompt)
+            
+            if response.text:
+                return response.text.strip()
+            else:
+                print("Empty response from Gemini API")
+                return self._generate_simulated_response(context, message)
+            
+        except Exception as e:
+            print(f"Error getting Gemini response: {str(e)}")
+            return self._generate_simulated_response(context, message)
+    
+    def _build_prompt_with_context(self, context, message):
+        """Build a complete prompt with system instructions and context"""
+        prompt = f"""{self.system_prompt}
+
+Current User Information:
+- Name: {context['user']['full_name']}
+- Role: {context['user']['role']}
+- Username: {context['user']['username']}
+
+Current Task Summary:
+- Total tasks: {context['tasks']['total']}
+- Pending: {context['tasks']['pending']}
+- In Progress: {context['tasks']['in_progress']}
+- Completed: {context['tasks']['completed']}
+
+User Message: {message}
+
+Please respond as Rise AI, keeping the following guidelines in mind:
+1. Be helpful, professional, and concise
+2. If the user wants to create a task, ask for title, description, and priority
+3. If they want to view tasks, provide relevant information based on their role
+4. For statistics requests, provide appropriate data based on their role (managers see team data, employees see personal data)
+5. Always offer to help with next steps
+
+Response:"""
+        
+        return prompt
+    
+    def _generate_simulated_response(self, context, message):
+        """Generate simulated AI responses for testing when Gemini API is not available"""
+        message_lower = message.lower()
+        
+        if "hello" in message_lower or "hi" in message_lower or "hey" in message_lower:
+            return f"Hello {context['user']['full_name']}! I'm Rise AI, your task management assistant. How can I help you today?"
+        
+        elif "task" in message_lower and ("show" in message_lower or "view" in message_lower or "list" in message_lower or "my" in message_lower):
+            total = context['tasks']['total']
+            pending = context['tasks']['pending']
+            if total == 0:
+                return "You don't have any tasks yet. Would you like me to help you create one? Just say 'create a new task' to get started!"
+            else:
+                return f"📋 **Your Task Summary:**\n\n• Total tasks: {total}\n• Pending: {pending}\n• In Progress: {context['tasks']['in_progress']}\n• Completed: {context['tasks']['completed']}\n\nWould you like me to show you details of any specific tasks or help you create a new one?"
+        
+        elif "create" in message_lower and "task" in message_lower:
+            return """🆕 **Let's create a new task!**
+
+Please provide the following information:
+
+**Required:**
+• **Title:** Brief description of the task
+• **Description:** Detailed explanation of what needs to be done
+
+**Optional:**
+• **Priority:** low, medium, high, or urgent (default: medium)
+
+**Example:** 
+"Create a task titled 'Review quarterly report' with high priority and description 'Review Q3 financial report and prepare summary for board meeting'"
+
+What task would you like to create?"""
+        
+        elif "statistic" in message_lower or "stats" in message_lower or "analytics" in message_lower:
+            if context['user']['role'] == 'manager':
+                completion_rate = round((context['tasks']['completed'] / max(context['tasks']['total'], 1)) * 100, 1)
+                return f"""📊 **Team Task Statistics:**
+
+• **Total tasks:** {context['tasks']['total']}
+• **Pending:** {context['tasks']['pending']}
+• **In Progress:** {context['tasks']['in_progress']}
+• **Completed:** {context['tasks']['completed']}
+• **Completion rate:** {completion_rate}%
+
+As a manager, you can also view individual team member statistics. Would you like me to show team performance details?"""
+            else:
+                completion_rate = round((context['tasks']['completed'] / max(context['tasks']['total'], 1)) * 100, 1)
+                return f"""📊 **Your Personal Task Statistics:**
+
+• **Total tasks:** {context['tasks']['total']}
+• **Pending:** {context['tasks']['pending']}
+• **In Progress:** {context['tasks']['in_progress']}
+• **Completed:** {context['tasks']['completed']}
+• **Personal completion rate:** {completion_rate}%
+
+Keep up the great work! Would you like tips on improving your productivity?"""
+        
+        elif "help" in message_lower or "what can you do" in message_lower:
+            if context['user']['role'] == 'manager':
+                return """🤖 **I can help you with:**
+
+**📋 Task Management:**
+• "Show me all tasks" - View team tasks
+• "Create a new task" - Add tasks for your team
+• "Show task statistics" - Team performance overview
+• "Assign task to [employee]" - Delegate tasks
+
+**📊 Team Management:**
+• "Show team performance" - Productivity insights
+• "View employee tasks" - Individual task tracking
+• "Generate reports" - Task completion reports
+
+**💡 General:**
+• Ask me anything about task management
+• Get productivity tips and insights
+
+What would you like to do?"""
+            else:
+                return """🤖 **I can help you with:**
+
+**📋 Task Management:**
+• "Show my tasks" - View your current tasks
+• "Create a new task" - Add new tasks
+• "Update task status" - Mark tasks as completed
+• "Show my statistics" - Your productivity stats
+
+**📊 Productivity:**
+• Get insights about your work patterns
+• Tips for better task management
+• Progress tracking and motivation
+
+**💡 General:**
+• Ask me anything about task management
+• Get help with organizing your work
+
+What would you like to do today?"""
+        
+        elif "update" in message_lower and "status" in message_lower:
+            return "📝 **Update Task Status**\n\nTo update a task status, please tell me:\n• Which task you want to update (by title or ID)\n• The new status (pending, in_progress, completed, cancelled)\n\nExample: 'Mark \"Review report\" as completed'\n\nWhich task would you like to update?"
+        
+        elif "thanks" in message_lower or "thank you" in message_lower:
+            return f"You're welcome, {context['user']['full_name']}! I'm always here to help you manage your tasks efficiently. Is there anything else you'd like to do?"
+        
+        else:
+            return f"""👋 **Hi {context['user']['full_name']}!**
+
+I'm Rise AI, your personal task management assistant. I'm here to help you stay organized and productive!
+
+**Quick actions you can try:**
+• "Show my tasks" - View your current tasks
+• "Create a new task" - Add a new task
+• "Show statistics" - See your productivity stats
+• "Help" - See all available commands
+
+What would you like to do?"""
+    
+    def _save_conversation(self, username, user_message, ai_response):
+        """Save conversation to chat history"""
+        try:
+            conversation = {
                 "username": username,
                 "user_message": user_message,
                 "ai_response": ai_response,
                 "timestamp": datetime.utcnow()
             }
-            self.chat_sessions_collection.insert_one(chat_data)
+            chat_history_collection.insert_one(conversation)
         except Exception as e:
-            print(f"Error saving chat session: {e}")
+            print(f"Error saving conversation: {str(e)}")
     
     def get_chat_history(self, username, limit=10):
         """Get chat history for a user"""
         try:
-            return list(self.chat_sessions_collection
-                       .find({"username": username}, {"_id": 0})
-                       .sort("timestamp", -1)
-                       .limit(limit))
+            history = list(
+                chat_history_collection
+                .find({"username": username}, {"_id": 0})
+                .sort("timestamp", -1)
+                .limit(limit)
+            )
+            return history
         except Exception as e:
-            print(f"Error retrieving chat history: {e}")
+            print(f"Error getting chat history: {str(e)}")
             return []
     
     def clear_chat_history(self, username):
         """Clear chat history for a user"""
         try:
-            result = self.chat_sessions_collection.delete_many({"username": username})
+            result = chat_history_collection.delete_many({"username": username})
             return result.deleted_count
         except Exception as e:
-            print(f"Error clearing chat history: {e}")
+            print(f"Error clearing chat history: {str(e)}")
             return 0

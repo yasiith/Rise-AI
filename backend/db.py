@@ -6,15 +6,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # MongoDB connection using environment variable
-MONGO_URI = os.getenv("MONGO_URI")
-client = MongoClient(MONGO_URI)
-db = client["rise_ai_db"]  # Database name
+MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+client = MongoClient(MONGODB_URI)
+db = client['rise_ai_db']  # Database name
 
 # Collections
-updates_collection = db["updates"]
-users_collection = db["users"]
-tasks_collection = db["tasks"]
-chat_sessions_collection = db["chat_sessions"]
+users_collection = db['users']
+tasks_collection = db['tasks']
+updates_collection = db['updates']
+chat_history_collection = db['chat_history']  # Add this line
+chat_sessions_collection = db['chat_sessions']  # Keep this for backward compatibility
 
 # Test connection function
 def test_connection():
