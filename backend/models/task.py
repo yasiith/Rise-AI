@@ -45,27 +45,29 @@ class Task:
     @staticmethod
     def get_tasks_by_user(username):
         tasks_collection = db["tasks"]
-        return list(tasks_collection.find({"employee_username": username}, {"_id": 1}).sort("created_at", -1))
+        # Fixed: Remove {"_id": 1} to get all fields
+        return list(tasks_collection.find({"employee_username": username}).sort("created_at", -1))
     
     @staticmethod
     def get_all_tasks():
         tasks_collection = db["tasks"]
-        return list(tasks_collection.find({}, {"_id": 1}).sort("created_at", -1))
+        # Fixed: Remove {"_id": 1} to get all fields
+        return list(tasks_collection.find({}).sort("created_at", -1))
     
     @staticmethod
     def get_tasks_by_status(status):
         tasks_collection = db["tasks"]
-        return list(tasks_collection.find({"status": status}, {"_id": 1}).sort("created_at", -1))
+        return list(tasks_collection.find({"status": status}).sort("created_at", -1))
     
     @staticmethod
     def get_tasks_by_priority(priority):
         tasks_collection = db["tasks"]
-        return list(tasks_collection.find({"priority": priority}, {"_id": 1}).sort("created_at", -1))
+        return list(tasks_collection.find({"priority": priority}).sort("created_at", -1))
     
     @staticmethod
     def get_tasks_by_manager(manager_username):
         tasks_collection = db["tasks"]
-        return list(tasks_collection.find({"assigned_manager": manager_username}, {"_id": 1}).sort("created_at", -1))
+        return list(tasks_collection.find({"assigned_manager": manager_username}).sort("created_at", -1))
     
     @staticmethod
     def update_task_status(task_id, status, completion_date=None):
