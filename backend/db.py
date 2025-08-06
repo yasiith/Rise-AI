@@ -9,7 +9,12 @@ load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 db = client["rise_ai_db"]  # Database name
-updates_collection = db["updates"]  # Collection name
+
+# Collections
+updates_collection = db["updates"]
+users_collection = db["users"]
+tasks_collection = db["tasks"]
+chat_sessions_collection = db["chat_sessions"]
 
 # Test connection function
 def test_connection():
