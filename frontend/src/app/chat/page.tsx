@@ -1,5 +1,6 @@
 import React from 'react'
-import Chatbot from '../components/chatbot'
+import Chatbot from '../components/Chat'
+
 
 
 const page = () => {
