@@ -1,5 +1,5 @@
 from datetime import datetime
-from db import db
+from db import db, users_collection
 import hashlib
 
 class User:

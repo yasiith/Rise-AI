@@ -1,7 +1,9 @@
 from flask import Blueprint, request, jsonify
 from models.user import User
-from db import users_collection
+from db import users_collection, db
 import hashlib
+import time
+from datetime import datetime
 
 users_bp = Blueprint('users', __name__)
 
@@ -13,94 +15,47 @@ def login():
         if not data:
             return jsonify({"success": False, "error": "No data provided"}), 400
         
-        username = data.get('username')
+        email = data.get('email')
         password = data.get('password')
         
-        print(f"Login attempt for username: {username}")  # Debug log
+        print(f"Login attempt for email: {email}")  # Debug log
         
-        if not username or not password:
-            return jsonify({"success": False, "error": "Username and password are required"}), 400
+        if not email or not password:
+            return jsonify({"success": False, "error": "Email and password are required"}), 400
         
-        # Find user in database
-        user_data = users_collection.find_one({"username": username})
+        # Find user in database by email instead of username
+        user_data = users_collection.find_one({"email": email})
         
         if not user_data:
-            print(f"User not found: {username}")  # Debug log
-            return jsonify({"success": False, "error": "Invalid username or password"}), 401
-        
-        print(f"User found: {user_data}")  # Debug log
-        
-        # Check for password field (could be 'password' or 'password_hash')
-        stored_password = None
-        if 'password' in user_data:
-            stored_password = user_data['password']
-            password_type = 'plain'
-        elif 'password_hash' in user_data:
-            stored_password = user_data['password_hash']
-            password_type = 'hash'
-        else:
-            print("No password field found in user data")
-            return jsonify({"success": False, "error": "User data corrupted"}), 500
-        
-        print(f"Found password field: {password_type}, value: {stored_password}")  # Debug log
+            return jsonify({"success": False, "error": "Invalid email or password"}), 401
         
         # Verify password
-        password_valid = False
-        
-        if password_type == 'plain':
-            # Plain text comparison
-            password_valid = (password == stored_password)
-        else:
-            # Hash comparison - try different methods
-            # Method 1: Direct hash comparison (if password is already hashed)
-            input_hash = hashlib.sha256(password.encode()).hexdigest()
-            if input_hash == stored_password:
-                password_valid = True
-            else:
-                # Method 2: Try common demo passwords
-                demo_passwords = {
-                    'demo_employee': ['password123', 'demo123', 'employee123', '123456'],
-                    'demo_manager': ['password123', 'demo123', 'manager123', '123456'],
-                    'admin': ['admin123', 'password123', '123456'],
-                    'employee1': ['emp123', 'password123', '123456']
-                }
-                
-                if username in demo_passwords:
-                    for demo_pass in demo_passwords[username]:
-                        demo_hash = hashlib.sha256(demo_pass.encode()).hexdigest()
-                        if demo_hash == stored_password:
-                            password_valid = True
-                            print(f"Password matched with demo password: {demo_pass}")  # Debug log
-                            break
-                
-                # Method 3: If still no match, try the input password directly
-                if not password_valid and password == stored_password:
-                    password_valid = True
-        
-        print(f"Password validation result: {password_valid}")  # Debug log
-        
-        if not password_valid:
-            return jsonify({"success": False, "error": "Invalid username or password"}), 401
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        if user_data.get('password_hash') != password_hash:
+            return jsonify({"success": False, "error": "Invalid email or password"}), 401
         
         # Create user object without password
         user_response = {
-            "username": user_data["username"],
-            "full_name": user_data["full_name"],
             "email": user_data["email"],
+            "full_name": user_data["full_name"],
             "role": user_data["role"]
         }
         
-        print(f"Login successful for: {username}")  # Debug log
+        # Generate a simple token (in production, use JWT)
+        token = hashlib.sha256(f"{email}{time.time()}".encode()).hexdigest()
+        
+        print(f"Login successful for: {email}")  # Debug log
         
         return jsonify({
             "success": True,
             "message": "Login successful",
-            "user": user_response
+            "user": user_response,
+            "token": token
         }), 200
         
     except Exception as e:
         print(f"Login error: {str(e)}")  # Debug log
-        return jsonify({"success": False, "error": "Internal server error"}), 500
+        return jsonify({"success": False, "error": "An error occurred during login"}), 500
 
 @users_bp.route("/register", methods=["POST"])
 def register():
@@ -110,42 +65,59 @@ def register():
         if not data:
             return jsonify({"success": False, "error": "No data provided"}), 400
         
+        # Add detailed logging
+        print(f"Processing registration for: {data.get('email', 'unknown')} with role: {data.get('role', 'unknown')}")
+        print(f"Database being used: {db.name}, Collection: {users_collection.name}")
+        
         # Validate required fields
         required_fields = ['username', 'password', 'full_name', 'email', 'role']
         for field in required_fields:
-            if not data.get(field):
-                return jsonify({"success": False, "error": f"{field} is required"}), 400
+            if field not in data:
+                return jsonify({"success": False, "error": f"Missing required field: {field}"}), 400
         
         # Check if user already exists
-        existing_user = users_collection.find_one({"username": data['username']})
+        existing_user = users_collection.find_one({"email": data['email']})
         if existing_user:
-            return jsonify({"success": False, "error": "Username already exists"}), 400
+            print(f"User with email {data['email']} already exists")
+            return jsonify({"success": False, "error": "User with this email already exists"}), 409
+        
+        existing_username = users_collection.find_one({"username": data['username']})
+        if existing_username:
+            print(f"Username {data['username']} already taken")
+            return jsonify({"success": False, "error": "Username already taken"}), 409
         
         # Hash password
         password_hash = hashlib.sha256(data['password'].encode()).hexdigest()
         
+        # Create user document
         user_data = {
             "username": data['username'],
-            "password_hash": password_hash,  # Store as password_hash to match your existing format
+            "password_hash": password_hash,
             "full_name": data['full_name'],
             "email": data['email'],
-            "role": data['role']
+            "role": data['role'],
+            "created_at": datetime.utcnow()
         }
         
-        # Save to database
+        # Debug print before insert
+        print(f"Attempting to insert user: {user_data['username']}")
+        
+        # Insert user with explicit acknowledgment
         result = users_collection.insert_one(user_data)
         
+        # Debug print after insert
+        print(f"Insert result: {result.acknowledged}, ID: {result.inserted_id}")
+        
         if result.inserted_id:
-            return jsonify({
-                "success": True,
-                "message": "User registered successfully"
-            }), 201
+            return jsonify({"success": True, "message": "User registered successfully"}), 201
         else:
             return jsonify({"success": False, "error": "Failed to register user"}), 500
             
     except Exception as e:
+        import traceback
         print(f"Registration error: {str(e)}")
-        return jsonify({"success": False, "error": "Internal server error"}), 500
+        print(traceback.format_exc())
+        return jsonify({"success": False, "error": "An error occurred during registration"}), 500
 
 # Add a test route to help figure out the correct password
 @users_bp.route("/test-password/<username>/<password>", methods=["GET"])
@@ -174,3 +146,41 @@ def test_password(username, password):
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@users_bp.route("/verify-db", methods=["GET"])
+def verify_db():
+    try:
+        # Check connection
+        from db import client
+        dbs = client.list_database_names()
+        
+        # Check database
+        from db import db
+        collections = db.list_collection_names()
+        
+        # Count users
+        user_count = users_collection.count_documents({})
+        
+        # Add a test document
+        test_id = users_collection.insert_one({"test": True, "timestamp": datetime.utcnow()}).inserted_id
+        
+        # Delete the test document
+        delete_result = users_collection.delete_one({"_id": test_id})
+        
+        return jsonify({
+            "success": True,
+            "connection": "Connected",
+            "databases": dbs,
+            "current_db": db.name,
+            "collections": collections,
+            "user_count": user_count,
+            "test_insert": str(test_id),
+            "test_delete": delete_result.deleted_count
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "success": False, 
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
