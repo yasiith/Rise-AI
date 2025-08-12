@@ -7,12 +7,18 @@ from routes.updates import updates_bp
 from db import test_connection
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for frontend communication
+
+# Apply CORS before registering any blueprints
+CORS(app, 
+     resources={r"/*": {"origins": "http://localhost:3000"}}, 
+     supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization", "Accept"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
 # Register blueprints
 app.register_blueprint(users_bp, url_prefix='/users')
 app.register_blueprint(tasks_bp)
-app.register_blueprint(chat_bp)
+app.register_blueprint(chat_bp, url_prefix='/chat')  # Make sure this is /chat
 app.register_blueprint(updates_bp)
 
 @app.route('/')

@@ -2,47 +2,29 @@
  * Base API client for making requests to the backend
  */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
-
-export type ApiResponse<T> = {
-  success: boolean;
-  data?: T;
-  error?: string;
-};
-
-export async function fetchApi<T>(
-  endpoint: string, 
-  options: RequestInit = {}
-): Promise<ApiResponse<T>> {
+export const fetchApi = async <T>(url: string, options: RequestInit = {}): Promise<{ success: boolean; data?: T; error?: string }> => {
   try {
-    const url = `${API_URL}${endpoint}`;
-    const headers = {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    };
-
-    const response = await fetch(url, {
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'; // Make sure this is correct
+    const response = await fetch(`${baseUrl}${url}`, {
       ...options,
-      headers,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+      credentials: 'include',
     });
 
-    const data = await response.json();
-    
     if (!response.ok) {
-      return {
-        success: false,
-        error: data.error || 'Something went wrong',
-      };
+      throw new Error(`API error: ${response.status}`);
     }
 
-    return {
-      success: true,
-      data: data as T,
-    };
+    const data = await response.json();
+    return { success: true, data };
   } catch (error) {
+    console.error('API Error:', error);
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Network error',
+      error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
-}
+};

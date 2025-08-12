@@ -1,298 +1,475 @@
 import os
-import google.generativeai as genai
 from datetime import datetime
-import json
-import re
-from db import chat_history_collection, tasks_collection, users_collection, db
-from models.task import Task
-from models.user import User
+from typing import List, Dict, Any, Optional
+
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.chains import ConversationChain
+from langchain.memory import ConversationBufferMemory
+from langchain.prompts import PromptTemplate
+
+from db import users_collection, chat_history_collection, tasks_collection, updates_collection
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
 class AIAgent:
+    """AI Agent powered by LangChain and Gemini"""
+    
     def __init__(self):
-        # Initialize Gemini client
-        api_key = os.getenv('GEMINI_API_KEY')
-        if not api_key:
-            print("Warning: GEMINI_API_KEY not found in environment variables")
-            self.use_simulation = True
+        self.api_key = os.getenv('GEMINI_API_KEY')
+        self.use_simulation = not self.api_key  # Use simulation if no API key is available
+        
+        if self.api_key:
+            try:
+                # Initialize LangChain with Gemini model
+                print("🔄 Initializing LangChain with Gemini...")
+                self.llm = ChatGoogleGenerativeAI(
+                    model="gemini-pro",
+                    google_api_key=self.api_key,
+                    temperature=0.7,
+                    convert_system_message_to_human=True
+                )
+                
+                # Create memory
+                self.memory = ConversationBufferMemory()
+                
+                # Define system prompt with enhanced manager update detection
+                template = """You are Rise AI, an assistant for a task management system.
+
+Your role is to help users submit daily updates (employees) or review team progress (managers).
+
+Important rules:
+1. NEVER invent or hallucinate updates, tasks, or user data.
+2. If a user wants to submit a daily update, guide them to provide:
+   - Tasks worked on today
+   - Progress made
+   - Blockers or challenges
+   - Plans for tomorrow
+3. For managers, if they ask for recent team updates (e.g., 'recent updates', 'team status'), summarize existing data.
+4. If a manager asks about a specific employee (e.g., 'show me John's updates'), do NOT guess — rely on real data.
+5. Always respond clearly and professionally.
+
+Current conversation:
+{history}
+Human: {input}
+AI: """
+
+                # Create conversation prompt
+                prompt = PromptTemplate(input_variables=["history", "input"], template=template)
+                
+                # Create conversation chain
+                self.conversation = ConversationChain(
+                    llm=self.llm,
+                    memory=self.memory,
+                    prompt=prompt,
+                    verbose=True
+                )
+                
+                # Test connection
+                print("✅ LangChain initialized with Gemini")
+                self.use_simulation = False
+                
+            except Exception as e:
+                print(f"❌ Error initializing LangChain: {e}")
+                print("⚠️ Falling back to rule-based responses")
+                self.use_simulation = True
         else:
-            genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel('gemini-pro')
-            self.use_simulation = False
-        
-        # Use chat_history_collection instead of chat_sessions_collection
-        self.chat_history_collection = chat_history_collection
-        
-        self.system_prompt = """
-        You are Rise AI, a helpful assistant for an employee task management system. 
-        You help employees submit tasks, check task status, and assist managers with task overview.
-        
-        Available actions for employees:
-        1. Create and submit new tasks
-        2. Check their task status and history
-        3. Update task progress
-        4. Get productivity insights
-        
-        Available actions for managers:
-        1. View all team tasks
-        2. Assign tasks to employees
-        3. Update task statuses
-        4. Get team performance overview
-        5. View task statistics
-        
-        When a user wants to create a task, extract:
-        - Title (required)
-        - Description (required) 
-        - Priority (low/medium/high/urgent, default: medium)
-        
-        Always be professional, helpful, and concise. If you need more information, ask specific questions.
-        """
+            print("⚠️ No Gemini API key found, using simulation mode")
     
-    def process_message(self, message, username):
-        """Process user message and return AI response"""
+    def process_message(self, message: str, email: str) -> str:
+        """Process a user message and return an AI response"""
         try:
-            # Get user context
-            user = User.find_by_username(username)
+            print(f"Processing message from {email}: {message}")
+            
+            # Get user from database
+            user = users_collection.find_one({"email": email})
             if not user:
-                return "I'm sorry, I couldn't find your user information. Please try logging in again."
+                return "I couldn't find your user account. Please try logging out and back in."
             
-            # Get user's tasks for context
-            user_tasks = Task.get_tasks_by_user(username)
+            user_role = user.get('role', 'employee')
+            user_name = user.get('full_name', 'there')
+            username = user.get('username', '')
             
-            # Build context for AI
-            context = self._build_context(user, user_tasks, message)
+            print(f"User: {user_name}, Role: {user_role}")
             
-            # Get AI response
-            ai_response = self._get_ai_response(context, message)
-            
-            # Save conversation to history
-            self._save_conversation(username, message, ai_response)
-            
-            return ai_response
-            
-        except Exception as e:
-            print(f"Error processing message: {str(e)}")
-            return "I apologize, but I encountered an error processing your request. Please try again."
-    
-    def _build_context(self, user, tasks, message):
-        """Build context for AI including user info and tasks"""
-        context = {
-            "user": {
-                "username": user["username"],
-                "full_name": user["full_name"],
-                "role": user["role"]
-            },
-            "tasks": {
-                "total": len(tasks),
-                "pending": len([t for t in tasks if t.get("status") == "pending"]),
-                "in_progress": len([t for t in tasks if t.get("status") == "in_progress"]),
-                "completed": len([t for t in tasks if t.get("status") == "completed"])
-            },
-            "current_message": message
-        }
-        return context
-    
-    def _get_ai_response(self, context, message):
-        """Get response from Gemini API or return simulated response"""
-        try:
-            # Build the prompt with context
-            full_prompt = self._build_prompt_with_context(context, message)
-            
-            if self.use_simulation:
-                print("Using simulated responses (Gemini API key not available)")
-                return self._generate_simulated_response(context, message)
-            
-            # Use Gemini API
-            response = self.model.generate_content(full_prompt)
-            
-            if response.text:
-                return response.text.strip()
-            else:
-                print("Empty response from Gemini API")
-                return self._generate_simulated_response(context, message)
-            
-        except Exception as e:
-            print(f"Error getting Gemini response: {str(e)}")
-            return self._generate_simulated_response(context, message)
-    
-    def _build_prompt_with_context(self, context, message):
-        """Build a complete prompt with system instructions and context"""
-        prompt = f"""{self.system_prompt}
-
-Current User Information:
-- Name: {context['user']['full_name']}
-- Role: {context['user']['role']}
-- Username: {context['user']['username']}
-
-Current Task Summary:
-- Total tasks: {context['tasks']['total']}
-- Pending: {context['tasks']['pending']}
-- In Progress: {context['tasks']['in_progress']}
-- Completed: {context['tasks']['completed']}
-
-User Message: {message}
-
-Please respond as Rise AI, keeping the following guidelines in mind:
-1. Be helpful, professional, and concise
-2. If the user wants to create a task, ask for title, description, and priority
-3. If they want to view tasks, provide relevant information based on their role
-4. For statistics requests, provide appropriate data based on their role (managers see team data, employees see personal data)
-5. Always offer to help with next steps
-
-Response:"""
-        
-        return prompt
-    
-    def _generate_simulated_response(self, context, message):
-        """Generate simulated AI responses for testing when Gemini API is not available"""
-        message_lower = message.lower()
-        
-        if "hello" in message_lower or "hi" in message_lower or "hey" in message_lower:
-            return f"Hello {context['user']['full_name']}! I'm Rise AI, your task management assistant. How can I help you today?"
-        
-        elif "task" in message_lower and ("show" in message_lower or "view" in message_lower or "list" in message_lower or "my" in message_lower):
-            total = context['tasks']['total']
-            pending = context['tasks']['pending']
-            if total == 0:
-                return "You don't have any tasks yet. Would you like me to help you create one? Just say 'create a new task' to get started!"
-            else:
-                return f"📋 **Your Task Summary:**\n\n• Total tasks: {total}\n• Pending: {pending}\n• In Progress: {context['tasks']['in_progress']}\n• Completed: {context['tasks']['completed']}\n\nWould you like me to show you details of any specific tasks or help you create a new one?"
-        
-        elif "create" in message_lower and "task" in message_lower:
-            return """🆕 **Let's create a new task!**
-
-Please provide the following information:
-
-**Required:**
-• **Title:** Brief description of the task
-• **Description:** Detailed explanation of what needs to be done
-
-**Optional:**
-• **Priority:** low, medium, high, or urgent (default: medium)
-
-**Example:** 
-"Create a task titled 'Review quarterly report' with high priority and description 'Review Q3 financial report and prepare summary for board meeting'"
-
-What task would you like to create?"""
-        
-        elif "statistic" in message_lower or "stats" in message_lower or "analytics" in message_lower:
-            if context['user']['role'] == 'manager':
-                completion_rate = round((context['tasks']['completed'] / max(context['tasks']['total'], 1)) * 100, 1)
-                return f"""📊 **Team Task Statistics:**
-
-• **Total tasks:** {context['tasks']['total']}
-• **Pending:** {context['tasks']['pending']}
-• **In Progress:** {context['tasks']['in_progress']}
-• **Completed:** {context['tasks']['completed']}
-• **Completion rate:** {completion_rate}%
-
-As a manager, you can also view individual team member statistics. Would you like me to show team performance details?"""
-            else:
-                completion_rate = round((context['tasks']['completed'] / max(context['tasks']['total'], 1)) * 100, 1)
-                return f"""📊 **Your Personal Task Statistics:**
-
-• **Total tasks:** {context['tasks']['total']}
-• **Pending:** {context['tasks']['pending']}
-• **In Progress:** {context['tasks']['in_progress']}
-• **Completed:** {context['tasks']['completed']}
-• **Personal completion rate:** {completion_rate}%
-
-Keep up the great work! Would you like tips on improving your productivity?"""
-        
-        elif "help" in message_lower or "what can you do" in message_lower:
-            if context['user']['role'] == 'manager':
-                return """🤖 **I can help you with:**
-
-**📋 Task Management:**
-• "Show me all tasks" - View team tasks
-• "Create a new task" - Add tasks for your team
-• "Show task statistics" - Team performance overview
-• "Assign task to [employee]" - Delegate tasks
-
-**📊 Team Management:**
-• "Show team performance" - Productivity insights
-• "View employee tasks" - Individual task tracking
-• "Generate reports" - Task completion reports
-
-**💡 General:**
-• Ask me anything about task management
-• Get productivity tips and insights
-
-What would you like to do?"""
-            else:
-                return """🤖 **I can help you with:**
-
-**📋 Task Management:**
-• "Show my tasks" - View your current tasks
-• "Create a new task" - Add new tasks
-• "Update task status" - Mark tasks as completed
-• "Show my statistics" - Your productivity stats
-
-**📊 Productivity:**
-• Get insights about your work patterns
-• Tips for better task management
-• Progress tracking and motivation
-
-**💡 General:**
-• Ask me anything about task management
-• Get help with organizing your work
-
-What would you like to do today?"""
-        
-        elif "update" in message_lower and "status" in message_lower:
-            return "📝 **Update Task Status**\n\nTo update a task status, please tell me:\n• Which task you want to update (by title or ID)\n• The new status (pending, in_progress, completed, cancelled)\n\nExample: 'Mark \"Review report\" as completed'\n\nWhich task would you like to update?"
-        
-        elif "thanks" in message_lower or "thank you" in message_lower:
-            return f"You're welcome, {context['user']['full_name']}! I'm always here to help you manage your tasks efficiently. Is there anything else you'd like to do?"
-        
-        else:
-            return f"""👋 **Hi {context['user']['full_name']}!**
-
-I'm Rise AI, your personal task management assistant. I'm here to help you stay organized and productive!
-
-**Quick actions you can try:**
-• "Show my tasks" - View your current tasks
-• "Create a new task" - Add a new task
-• "Show statistics" - See your productivity stats
-• "Help" - See all available commands
-
-What would you like to do?"""
-    
-    def _save_conversation(self, username, user_message, ai_response):
-        """Save conversation to chat history"""
-        try:
-            conversation = {
-                "username": username,
-                "user_message": user_message,
-                "ai_response": ai_response,
-                "timestamp": datetime.utcnow()
+            # Store incoming message in chat history
+            chat_entry = {
+                "username": email,
+                "user_message": message,
+                "timestamp": datetime.utcnow(),
             }
-            chat_history_collection.insert_one(conversation)
+
+            # === DAILY UPDATE DETECTION & STORAGE (FOR EMPLOYEES ONLY) ===
+            if user_role == "employee":
+                # Heuristic: check for update-like content
+                update_keywords = ["worked on", "progress", "blocker", "done", "completed", "today", 
+                                 "yesterday", "tomorrow", "task", "bug", "fix", "feature", "stuck", "help"]
+                message_lower = message.lower()
+                has_update_content = any(keyword in message_lower for keyword in update_keywords)
+                is_long_enough = len(message.strip()) > 20  # Avoid capturing short messages like "ok"
+
+                if has_update_content and is_long_enough:
+                    # Prepare and save the update
+                    update_entry = {
+                        "employee_username": username,
+                        "employee_name": user_name,
+                        "content": message.strip(),
+                        "timestamp": datetime.utcnow()
+                    }
+                    try:
+                        updates_collection.insert_one(update_entry)
+                        print(f"✅ Daily update saved for {username}")
+                        
+                        # Prepare success response
+                        success_msg = (
+                            f"Got it, {user_name}! ✅\n\n"
+                            "Your daily update has been successfully submitted.\n"
+                            "Your manager will be able to view it in the updates section."
+                        )
+                        chat_entry["ai_response"] = success_msg
+                        chat_history_collection.insert_one(chat_entry)
+                        return success_msg  # Exit early after submission
+
+                    except Exception as e:
+                        print(f"❌ Error saving update to DB: {e}")
+                        error_msg = (
+                            f"Thanks for sharing, {user_name}, but I couldn't submit your update right now. "
+                            "Please try again later or use the app to submit it directly."
+                        )
+                        chat_entry["ai_response"] = error_msg
+                        chat_history_collection.insert_one(chat_entry)
+                        return error_msg
+
+            # === MANAGER: NATURAL LANGUAGE HANDLING FOR TEAM & SPECIFIC EMPLOYEE UPDATES ===
+            if user_role == "manager":
+                message_lower = message.lower().strip()
+
+                # 🟡 First: Detect general team updates BEFORE trying to parse employee names
+                team_update_triggers = [
+                    "recent updates", "latest updates", "team updates", "have there been",
+                    "any new updates", "what have employees", "show me updates",
+                    "daily reports", "status updates", "how is the team doing",
+                    "team status", "all updates", "employee reports"
+                ]
+                if any(trigger in message_lower for trigger in team_update_triggers):
+                    response = self._get_updates_summary(username, user_role)
+                    chat_entry["ai_response"] = response
+                    chat_history_collection.insert_one(chat_entry)
+                    return response
+
+                # 🟢 Now: Detect specific employee query (e.g., "Show me John's updates")
+                import re
+                patterns = [
+                    r"show me (\w+)'?s?\b",
+                    r"updates? from (\w+)",
+                    r"what did (\w+) (report|submit|work|do|update)",
+                    r"how is (\w+) doing",
+                    r"status of (\w+)",
+                    r"(\w+)'?s\s+(update|progress|status)"
+                ]
+
+                # List of words that should NEVER be treated as employee names
+                reserved_keywords = {
+                    "recent", "latest", "all", "team", "employee", "employees",
+                    "any", "the", "my", "our", "this", "that", "new", "daily",
+                    "status", "report", "update", "progress"
+                }
+                
+                for pattern in patterns:
+                    match = re.search(pattern, message_lower)
+                    if match:
+                        employee_name = match.group(1).lower()
+                        if employee_name in reserved_keywords:
+                            continue  # Skip if it's a keyword, not a real name
+                        response = self._get_employee_updates(username, employee_name)
+                        chat_entry["ai_response"] = response
+                        chat_history_collection.insert_one(chat_entry)
+                        return response
+
+            # === REGULAR AI RESPONSE GENERATION (fallback) ===
+            if self.use_simulation:
+                response = self._generate_rule_based_response(message, user_role, user_name)
+            else:
+                if message.lower().startswith("/"):
+                    response = self._process_command(message.lower(), username, user_role)
+                else:
+                    try:
+                        # Add context to guide AI behavior
+                        contextual_message = (
+                            f"[USER: {user_name}, ROLE: {user_role}]\n"
+                            f"IMPORTANT: If the manager asks for 'recent updates', 'team updates', or similar, "
+                            f"fetch and summarize the latest employee updates using real data. "
+                            f"If they mention a specific employee by name, only return that employee's updates. "
+                            f"Do not invent anything.\n"
+                            f"User message: {message}"
+                        )
+                        response = self.conversation.predict(input=contextual_message)
+                    except Exception as e:
+                        print(f"⚠️ Error with LangChain: {e}")
+                        response = self._generate_rule_based_response(message, user_role, user_name)
+
+            # Store normal AI response
+            chat_entry["ai_response"] = response
+            chat_history_collection.insert_one(chat_entry)
+            return response
+
         except Exception as e:
-            print(f"Error saving conversation: {str(e)}")
-    
-    def get_chat_history(self, username, limit=10):
-        """Get chat history for a user"""
+            print(f"❌ Error in process_message: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return "I'm having trouble processing your request. Please try again later."
+
+    def _process_command(self, command: str, username: str, role: str) -> str:
+        """Process special slash commands"""
+        if command.startswith("/tasks"):
+            return self._get_tasks_summary(username, role)
+        elif command.startswith("/updates"):
+            # Extract optional employee username
+            parts = command.strip().split()
+            if len(parts) > 1:
+                target_employee = parts[1].strip().lower()
+                if role == "manager":
+                    return self._get_employee_updates(username, target_employee)
+                else:
+                    return "Only managers can view other employees' updates."
+            return self._get_updates_summary(username, role)
+        elif command.startswith("/help"):
+            return self._get_help_message(role)
+        else:
+            return f"Unknown command '{command}'. Type /help for available commands."
+
+    def _get_employee_updates(self, manager_username: str, employee_username: str) -> str:
+        """Fetch updates from a specific employee (only if manager has access)"""
+        try:
+            # Validate that this is a real employee
+            employee = users_collection.find_one({
+                "username": {"$regex": f"^{employee_username}$", "$options": "i"},  # Case-insensitive
+                "role": "employee"
+            })
+            if not employee:
+                return f"Could not find an employee with username: {employee_username}"
+
+            actual_username = employee["username"]  # Use exact match
+
+            updates = list(
+                updates_collection.find({"employee_username": actual_username})
+                .sort("timestamp", -1)
+                .limit(5)
+            )
+
+            if not updates:
+                return f"{actual_username} hasn't submitted any updates yet."
+
+            response = f"Recent updates from **{actual_username}**:\n\n"
+            for update in updates:
+                timestamp = update.get("timestamp")
+                date_str = timestamp.strftime("%Y-%m-%d %H:%M") if timestamp else "Unknown date"
+                content = update.get("content", "No content")
+                response += f"📅 **{date_str}**:\n{content}\n\n"
+
+            return response
+        except Exception as e:
+            print(f"Error fetching updates for {employee_username}: {e}")
+            return f"Sorry, I couldn't retrieve updates for {employee_username} right now."
+
+    def _get_tasks_summary(self, username: str, role: str) -> str:
+        """Get summary of tasks for the user"""
+        try:
+            if role == "manager":
+                tasks = list(tasks_collection.find({"assigned_manager": username}))
+                if not tasks:
+                    return "You haven't assigned any tasks yet. You can create tasks for your team members."
+                
+                tasks_by_employee = {}
+                for task in tasks:
+                    employee = task.get("employee_username")
+                    if employee not in tasks_by_employee:
+                        tasks_by_employee[employee] = []
+                    tasks_by_employee[employee].append(task)
+                
+                response = "Here's a summary of tasks you've assigned:\n\n"
+                for employee, emp_tasks in tasks_by_employee.items():
+                    response += f"**{employee}**:\n"
+                    for task in emp_tasks:
+                        status = task.get("status", "pending")
+                        response += f"- {task.get('title')} ({status})\n"
+                    response += "\n"
+                return response
+            else:
+                tasks = list(tasks_collection.find({"employee_username": username}))
+                if not tasks:
+                    return "You don't have any assigned tasks yet."
+                
+                pending = [t for t in tasks if t.get("status") == "pending"]
+                in_progress = [t for t in tasks if t.get("status") == "in-progress"]
+                completed = [t for t in tasks if t.get("status") == "completed"]
+                
+                response = "Here's a summary of your tasks:\n\n"
+                if pending:
+                    response += "**Pending Tasks**:\n"
+                    for task in pending:
+                        response += f"- {task.get('title')}\n"
+                    response += "\n"
+                if in_progress:
+                    response += "**In Progress**:\n"
+                    for task in in_progress:
+                        response += f"- {task.get('title')}\n"
+                    response += "\n"
+                if completed:
+                    response += "**Completed**:\n"
+                    for task in completed:
+                        response += f"- {task.get('title')}\n"
+                return response
+        except Exception as e:
+            print(f"Error in _get_tasks_summary: {e}")
+            return "I encountered an error while fetching your tasks."
+
+    def _get_updates_summary(self, username: str, role: str) -> str:
+        """Get summary of recent updates"""
+        try:
+            if role == "manager":
+                updates = list(updates_collection.find().sort("timestamp", -1).limit(10))
+                if not updates:
+                    return "There are no updates from your team yet."
+                
+                response = "Recent updates from your team:\n\n"
+                for update in updates:
+                    employee = update.get("employee_username", "Unknown")
+                    timestamp = update.get("timestamp")
+                    date_str = timestamp.strftime("%Y-%m-%d %H:%M") if timestamp else "Unknown date"
+                    content = update.get("content", "No content")
+                    response += f"**{employee}** ({date_str}):\n{content}\n\n"
+                return response
+            else:
+                updates = list(updates_collection.find({"employee_username": username}).sort("timestamp", -1).limit(5))
+                if not updates:
+                    return "You haven't submitted any updates yet."
+                
+                response = "Your recent updates:\n\n"
+                for update in updates:
+                    timestamp = update.get("timestamp")
+                    date_str = timestamp.strftime("%Y-%m-%d %H:%M") if timestamp else "Unknown date"
+                    content = update.get("content", "No content")
+                    response += f"**{date_str}**:\n{content}\n\n"
+                return response
+        except Exception as e:
+            print(f"Error in _get_updates_summary: {e}")
+            return "I encountered an error while fetching updates."
+
+    def _get_help_message(self, role: str) -> str:
+        """Get help message based on user role"""
+        common_commands = """
+Available commands:
+/tasks - View task summary
+/updates - View recent updates
+/help - Show this help message
+"""
+        if role == "manager":
+            return "Manager Help:\n" + common_commands + """
+You can also ask me:
+- "Show me John's updates"
+- "What did Alice report today?"
+- "Show recent team updates"
+- "How is the team doing?"
+- "Status of David"
+"""
+        else:
+            return "Employee Help:\n" + common_commands + """
+You can also ask me:
+- "Submit a daily update"
+- "Show my task progress"
+- "Help me prioritize my tasks"
+"""
+
+    def _generate_rule_based_response(self, message: str, role: str, name: str) -> str:
+        """Generate a rule-based response when API is unavailable"""
+        message = message.lower().strip()
+
+        # Greeting responses
+        if any(greeting in message for greeting in ["hi", "hello", "hey", "greetings"]):
+            if role == "manager":
+                return f"Hello {name}! I'm your management assistant. Ask about team or employee updates."
+            else:
+                return f"Hello {name}! Ready to submit your daily update?"
+
+        # Update intent
+        update_triggers = ["update", "status", "progress", "done today", "worked on", "blocker"]
+        if any(trigger in message for trigger in update_triggers):
+            if role == "employee":
+                return (f"Got it, {name}. Share:\n"
+                        "1. Tasks worked on today\n"
+                        "2. Progress\n"
+                        "3. Blockers\n"
+                        "4. Plans for tomorrow")
+            else:
+                return (f"As a manager, ask: 'Show me John's updates' or 'Recent team updates'.")
+
+        # Task-related
+        if any(word in message for word in ["task", "work", "project"]):
+            return f"Use '/tasks' to view task assignments."
+
+        # Help
+        if "help" in message:
+            return self._get_help_message(role)
+
+        # === MANAGER: Rule-based natural language handling ===
+        if role == "manager":
+            msg = message
+
+            # Team updates first
+            team_triggers = [
+                "recent updates", "team updates", "any new", "what have employees",
+                "show me updates", "daily reports", "how is the team doing"
+            ]
+            if any(t in msg for t in team_triggers):
+                return self._get_updates_summary(username=name, role=role)
+
+            # Specific employee query
+            patterns = [
+                r"show me (\w+)'?s?\b", r"updates? from (\w+)", r"what did (\w+) (report|submit)",
+                r"how is (\w+) doing", r"status of (\w+)", r"(\w+)'?s\s+update"
+            ]
+            reserved = {"recent", "latest", "all", "team", "any", "new", "daily", "employee", "employees"}
+
+            for pattern in patterns:
+                match = re.search(pattern, msg)
+                if match:
+                    emp = match.group(1).lower()
+                    if emp in reserved:
+                        continue
+                    return self._get_employee_updates(username=name, employee_username=emp)
+
+            return (f"Hi {name}, you can ask:\n"
+                    "- 'Show me Alex's updates'\n"
+                    "- 'Recent team updates'\n"
+                    "- 'How is Sam doing?'")
+
+        # Default employee
+        return f"Hi {name}, share what you worked on today."
+
+    def get_chat_history(self, username: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get chat history for a specific user"""
         try:
             history = list(
-                chat_history_collection
-                .find({"username": username}, {"_id": 0})
-                .sort("timestamp", -1)
-                .limit(limit)
+                chat_history_collection.find(
+                    {"username": username},
+                    {"_id": 0, "username": 1, "user_message": 1, "ai_response": 1, "timestamp": 1}
+                ).sort("timestamp", -1).limit(limit)
             )
+            for entry in history:
+                if "timestamp" in entry and isinstance(entry["timestamp"], datetime):
+                    entry["timestamp"] = entry["timestamp"].isoformat()
             return history
         except Exception as e:
-            print(f"Error getting chat history: {str(e)}")
+            print(f"Error in get_chat_history: {e}")
             return []
-    
-    def clear_chat_history(self, username):
-        """Clear chat history for a user"""
+
+    def clear_chat_history(self, username: str) -> int:
+        """Clear chat history for a specific user"""
         try:
             result = chat_history_collection.delete_many({"username": username})
             return result.deleted_count
         except Exception as e:
-            print(f"Error clearing chat history: {str(e)}")
+            print(f"Error in clear_chat_history: {e}")
             return 0

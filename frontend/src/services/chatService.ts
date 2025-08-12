@@ -11,12 +11,18 @@ export type ChatResponse = {
   success: boolean;
   response: string;
   timestamp: string;
+  error?: string;
 };
 
 export const chatService = {
   sendMessage: async (username: string, message: string) => {
+    console.log(`Sending message from ${username}: ${message}`);
     return fetchApi<ChatResponse>('/chat', {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
       body: JSON.stringify({
         username,
         message,
@@ -36,6 +42,6 @@ export const chatService = {
   },
   
   checkChatStatus: async () => {
-    return fetchApi<{ success: boolean, status: string, ai_simulation: boolean }>('/chat/status');
+    return fetchApi<{ success: boolean, status: string, ai_simulation: boolean, api_key_configured: boolean }>('/chat/status');
   }
 };
