@@ -5,12 +5,14 @@ from routes.task_routes import tasks_bp
 from routes.chat_routes import chat_bp
 from routes.updates import updates_bp
 from db import test_connection
+import os
 
 app = Flask(__name__)
 
-# Apply CORS before registering any blueprints
+# Update CORS configuration
+cors_origins = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
 CORS(app, 
-     resources={r"/*": {"origins": "http://localhost:3000"}}, 
+     resources={r"/*": {"origins": cors_origins}}, 
      supports_credentials=True,
      allow_headers=["Content-Type", "Authorization", "Accept"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
@@ -31,5 +33,6 @@ if not test_connection():
     # You can uncomment the line below to exit if MongoDB isn't working
     # import sys; sys.exit(1)
 
-if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=5000)
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)

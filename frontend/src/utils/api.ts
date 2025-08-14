@@ -4,7 +4,10 @@
 
 export const fetchApi = async <T>(url: string, options: RequestInit = {}): Promise<{ success: boolean; data?: T; error?: string }> => {
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'; // Make sure this is correct
+    // Get API URL from environment or fallback to localhost
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+    console.log(`API call to: ${baseUrl}${url}`);
+    
     const response = await fetch(`${baseUrl}${url}`, {
       ...options,
       headers: {
