@@ -1,5 +1,8 @@
 import os
-from typing import List, Dict, Any, Optional  # Add this import
+import re
+from datetime import datetime
+from typing import List, Dict, Any, Optional
+
 from langchain.chains import ConversationChain
 from langchain.memory import ConversationBufferMemory
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -159,7 +162,6 @@ AI: """
                     return response
 
                 # 🟢 Now: Detect specific employee query (e.g., "Show me John's updates")
-                import re
                 patterns = [
                     r"show me (\w+)'?s?\b",
                     r"updates? from (\w+)",
@@ -189,7 +191,7 @@ AI: """
 
             # === REGULAR AI RESPONSE GENERATION (fallback) ===
             if self.use_simulation:
-                response = self._generate_rule_based_response(message, user_role, user_name)
+                response = self._generate_rule_based_response(message, user_role, user_name, username)  # Added username parameter
             else:
                 if message.lower().startswith("/"):
                     response = self._process_command(message.lower(), username, user_role)
@@ -207,7 +209,7 @@ AI: """
                         response = self.conversation.predict(input=contextual_message)
                     except Exception as e:
                         print(f"⚠️ Error with LangChain: {e}")
-                        response = self._generate_rule_based_response(message, user_role, user_name)
+                        response = self._generate_rule_based_response(message, user_role, user_name, username)  # Added username
 
             # Store normal AI response
             chat_entry["ai_response"] = response
@@ -382,7 +384,7 @@ You can also ask me:
 - "Help me prioritize my tasks"
 """
 
-    def _generate_rule_based_response(self, message: str, role: str, name: str) -> str:
+    def _generate_rule_based_response(self, message: str, role: str, name: str, username: str) -> str:
         """Generate a rule-based response when API is unavailable"""
         message = message.lower().strip()
 
@@ -403,7 +405,7 @@ You can also ask me:
                         "3. Blockers\n"
                         "4. Plans for tomorrow")
             else:
-                return (f"As a manager, ask: 'Show me John's updates' or 'Recent team updates'.")
+                return (f"As a manager, ask: 'Show me John's updates' or 'Recent team updates'.");
 
         # Task-related
         if any(word in message for word in ["task", "work", "project"]):
@@ -423,7 +425,7 @@ You can also ask me:
                 "show me updates", "daily reports", "how is the team doing"
             ]
             if any(t in msg for t in team_triggers):
-                return self._get_updates_summary(username=name, role=role)
+                return self._get_updates_summary(username, role)  # Fixed: using username instead of name
 
             # Specific employee query
             patterns = [
@@ -438,7 +440,7 @@ You can also ask me:
                     emp = match.group(1).lower()
                     if emp in reserved:
                         continue
-                    return self._get_employee_updates(username=name, employee_username=emp)
+                    return self._get_employee_updates(username, emp)  # Fixed: using username instead of name
 
             return (f"Hi {name}, you can ask:\n"
                     "- 'Show me Alex's updates'\n"
