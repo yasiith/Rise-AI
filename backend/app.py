@@ -13,7 +13,7 @@ print("🟩 DEBUG: PORT =", os.environ.get("PORT"))
 
 app = Flask(__name__)
 
-# Update CORS configuration to explicitly include your frontend domain
+# ONLY use the Flask-CORS extension (remove the after_request function)
 CORS(app, 
      resources={r"/*": {"origins": ["http://localhost:3000", "https://rise-ai-frontend.onrender.com"]}}, 
      supports_credentials=True,
@@ -29,15 +29,6 @@ app.register_blueprint(updates_bp)
 @app.route('/')
 def health_check():
     return {"status": "Rise AI Backend is running!", "version": "1.0.0"}, 200
-
-# Add explicit CORS headers to all responses
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', 'https://rise-ai-frontend.onrender.com')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    return response
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
