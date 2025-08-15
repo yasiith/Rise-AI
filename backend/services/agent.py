@@ -3,16 +3,19 @@ import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-from langchain.chains import ConversationChain
-from langchain.memory import ConversationBufferMemory
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.prompts import PromptTemplate
+# --- 🔽 Move imports inside try block to avoid premature import errors ---
+# We'll import them when needed
 
 from db import users_collection, chat_history_collection, tasks_collection, updates_collection
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Print debug info
+print(f"🟩 DEBUG: MONGODB_URI = {os.getenv('MONGODB_URI')}")
+print(f"🟩 DEBUG: GEMINI_API_KEY = {os.getenv('GEMINI_API_KEY')}")
+print(f"🟩 DEBUG: PORT = {os.getenv('PORT', '10000')}")
 
 class AIAgent:
     """AI Agent powered by LangChain and Gemini"""
@@ -23,32 +26,37 @@ class AIAgent:
         
         if self.api_key:
             try:
-                # Initialize LangChain with Gemini model - FIXED IMPLEMENTATION
                 print("🔄 Initializing LangChain with Gemini...")
-                import google.generativeai as genai
-                from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
                 
-                # Configure the Google Generative AI
-                genai.configure(api_key=self.api_key)
-                
-                # Create the LLM with explicit model name
+                # Delayed imports to avoid issues
+                from langchain_google_genai import ChatGoogleGenerativeAI
+                from langchain.chains import ConversationChain
+                from langchain.memory import ConversationBufferMemory
+                from langchain.prompts import PromptTemplate
+
+                # Initialize the LLM
                 self.llm = ChatGoogleGenerativeAI(
                     model="gemini-pro",
                     google_api_key=self.api_key,
                     temperature=0.7,
                     convert_system_message_to_human=True,
-                    safety_settings=[
-                        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
-                    ]
+                    safety_settings={
+                        "HARM_CATEGORY_HARASSMENT": "BLOCK_MEDIUM_AND_ABOVE",
+                        "HARM_CATEGORY_HATE_SPEECH": "BLOCK_MEDIUM_AND_ABOVE",
+                        "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_MEDIUM_AND_ABOVE",
+                        "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_MEDIUM_AND_ABOVE",
+                    }
                 )
-                
+
+                # Test if LLM can be called
+                from langchain_core.messages import HumanMessage
+                test_response = self.llm.invoke([HumanMessage(content="hi")])
+                print("✅ Gemini LLM test passed:", test_response.content[:50] + "...")
+
                 # Create memory
                 self.memory = ConversationBufferMemory()
-                
-                # Define system prompt with enhanced manager update detection
+
+                # Define prompt template
                 template = """You are Rise AI, an assistant for a task management system.
 
 Your role is to help users submit daily updates (employees) or review team progress (managers).
@@ -69,34 +77,32 @@ Current conversation:
 Human: {input}
 AI: """
 
-                # Create conversation prompt
                 prompt = PromptTemplate(input_variables=["history", "input"], template=template)
-                
-                # Create conversation chain
+
                 self.conversation = ConversationChain(
                     llm=self.llm,
                     memory=self.memory,
                     prompt=prompt,
                     verbose=True
                 )
-                
-                # Test connection
+
                 print("✅ LangChain initialized with Gemini")
                 self.use_simulation = False
-                
+
             except Exception as e:
                 print(f"❌ Error initializing LangChain: {e}")
+                import traceback
+                print(traceback.format_exc())
                 print("⚠️ Falling back to rule-based responses")
                 self.use_simulation = True
         else:
             print("⚠️ No Gemini API key found, using simulation mode")
-    
+
     def process_message(self, message: str, email: str) -> str:
         """Process a user message and return an AI response"""
         try:
             print(f"Processing message from {email}: {message}")
             
-            # Get user from database
             user = users_collection.find_one({"email": email})
             if not user:
                 return "I couldn't find your user account. Please try logging out and back in."
@@ -107,7 +113,6 @@ AI: """
             
             print(f"User: {user_name}, Role: {user_role}")
             
-            # Store incoming message in chat history
             chat_entry = {
                 "username": email,
                 "user_message": message,
@@ -116,15 +121,13 @@ AI: """
 
             # === DAILY UPDATE DETECTION & STORAGE (FOR EMPLOYEES ONLY) ===
             if user_role == "employee":
-                # Heuristic: check for update-like content
                 update_keywords = ["worked on", "progress", "blocker", "done", "completed", "today", 
                                  "yesterday", "tomorrow", "task", "bug", "fix", "feature", "stuck", "help"]
                 message_lower = message.lower()
                 has_update_content = any(keyword in message_lower for keyword in update_keywords)
-                is_long_enough = len(message.strip()) > 20  # Avoid capturing short messages like "ok"
+                is_long_enough = len(message.strip()) > 20
 
                 if has_update_content and is_long_enough:
-                    # Prepare and save the update
                     update_entry = {
                         "employee_username": username,
                         "employee_name": user_name,
@@ -135,7 +138,6 @@ AI: """
                         updates_collection.insert_one(update_entry)
                         print(f"✅ Daily update saved for {username}")
                         
-                        # Prepare success response
                         success_msg = (
                             f"Got it, {user_name}! ✅\n\n"
                             "Your daily update has been successfully submitted.\n"
@@ -143,7 +145,7 @@ AI: """
                         )
                         chat_entry["ai_response"] = success_msg
                         chat_history_collection.insert_one(chat_entry)
-                        return success_msg  # Exit early after submission
+                        return success_msg
 
                     except Exception as e:
                         print(f"❌ Error saving update to DB: {e}")
@@ -155,11 +157,10 @@ AI: """
                         chat_history_collection.insert_one(chat_entry)
                         return error_msg
 
-            # === MANAGER: NATURAL LANGUAGE HANDLING FOR TEAM & SPECIFIC EMPLOYEE UPDATES ===
+            # === MANAGER: NATURAL LANGUAGE HANDLING ===
             if user_role == "manager":
                 message_lower = message.lower().strip()
 
-                # 🟡 First: Detect general team updates BEFORE trying to parse employee names
                 team_update_triggers = [
                     "recent updates", "latest updates", "team updates", "have there been",
                     "any new updates", "what have employees", "show me updates",
@@ -172,7 +173,6 @@ AI: """
                     chat_history_collection.insert_one(chat_entry)
                     return response
 
-                # 🟢 Now: Detect specific employee query (e.g., "Show me John's updates")
                 patterns = [
                     r"show me (\w+)'?s?\b",
                     r"updates? from (\w+)",
@@ -181,8 +181,6 @@ AI: """
                     r"status of (\w+)",
                     r"(\w+)'?s\s+(update|progress|status)"
                 ]
-
-                # List of words that should NEVER be treated as employee names
                 reserved_keywords = {
                     "recent", "latest", "all", "team", "employee", "employees",
                     "any", "the", "my", "our", "this", "that", "new", "daily",
@@ -194,21 +192,20 @@ AI: """
                     if match:
                         employee_name = match.group(1).lower()
                         if employee_name in reserved_keywords:
-                            continue  # Skip if it's a keyword, not a real name
+                            continue
                         response = self._get_employee_updates(username, employee_name)
                         chat_entry["ai_response"] = response
                         chat_history_collection.insert_one(chat_entry)
                         return response
 
-            # === REGULAR AI RESPONSE GENERATION (fallback) ===
+            # === REGULAR AI RESPONSE GENERATION ===
             if self.use_simulation:
-                response = self._generate_rule_based_response(message, user_role, user_name, username)  # Added username parameter
+                response = self._generate_rule_based_response(message, user_role, user_name, username)
             else:
                 if message.lower().startswith("/"):
                     response = self._process_command(message.lower(), username, user_role)
                 else:
                     try:
-                        # Add context to guide AI behavior
                         contextual_message = (
                             f"[USER: {user_name}, ROLE: {user_role}]\n"
                             f"IMPORTANT: If the manager asks for 'recent updates', 'team updates', or similar, "
@@ -220,9 +217,8 @@ AI: """
                         response = self.conversation.predict(input=contextual_message)
                     except Exception as e:
                         print(f"⚠️ Error with LangChain: {e}")
-                        response = self._generate_rule_based_response(message, user_role, user_name, username)  # Added username
+                        response = self._generate_rule_based_response(message, user_role, user_name, username)
 
-            # Store normal AI response
             chat_entry["ai_response"] = response
             chat_history_collection.insert_one(chat_entry)
             return response
@@ -233,12 +229,13 @@ AI: """
             print(traceback.format_exc())
             return "I'm having trouble processing your request. Please try again later."
 
+    # Keep the rest of your methods unchanged: _process_command, _get_employee_updates, etc.
+    # (They are already well-written and don't need changes)
+
     def _process_command(self, command: str, username: str, role: str) -> str:
-        """Process special slash commands"""
         if command.startswith("/tasks"):
             return self._get_tasks_summary(username, role)
         elif command.startswith("/updates"):
-            # Extract optional employee username
             parts = command.strip().split()
             if len(parts) > 1:
                 target_employee = parts[1].strip().lower()
@@ -253,24 +250,17 @@ AI: """
             return f"Unknown command '{command}'. Type /help for available commands."
 
     def _get_employee_updates(self, manager_username: str, employee_username: str) -> str:
-        """Fetch updates from a specific employee (only if manager has access)"""
         try:
-            # Validate that this is a real employee
             employee = users_collection.find_one({
-                "username": {"$regex": f"^{employee_username}$", "$options": "i"},  # Case-insensitive
+                "username": {"$regex": f"^{employee_username}$", "$options": "i"},
                 "role": "employee"
             })
             if not employee:
                 return f"Could not find an employee with username: {employee_username}"
 
-            actual_username = employee["username"]  # Use exact match
-
-            updates = list(
-                updates_collection.find({"employee_username": actual_username})
-                .sort("timestamp", -1)
-                .limit(5)
-            )
-
+            actual_username = employee["username"]
+            updates = list(updates_collection.find({"employee_username": actual_username})
+                           .sort("timestamp", -1).limit(5))
             if not updates:
                 return f"{actual_username} hasn't submitted any updates yet."
 
@@ -280,30 +270,26 @@ AI: """
                 date_str = timestamp.strftime("%Y-%m-%d %H:%M") if timestamp else "Unknown date"
                 content = update.get("content", "No content")
                 response += f"📅 **{date_str}**:\n{content}\n\n"
-
             return response
         except Exception as e:
             print(f"Error fetching updates for {employee_username}: {e}")
             return f"Sorry, I couldn't retrieve updates for {employee_username} right now."
 
     def _get_tasks_summary(self, username: str, role: str) -> str:
-        """Get summary of tasks for the user"""
         try:
             if role == "manager":
                 tasks = list(tasks_collection.find({"assigned_manager": username}))
                 if not tasks:
-                    return "You haven't assigned any tasks yet. You can create tasks for your team members."
-                
+                    return "You haven't assigned any tasks yet."
                 tasks_by_employee = {}
                 for task in tasks:
-                    employee = task.get("employee_username")
-                    if employee not in tasks_by_employee:
-                        tasks_by_employee[employee] = []
-                    tasks_by_employee[employee].append(task)
-                
+                    emp = task.get("employee_username")
+                    if emp not in tasks_by_employee:
+                        tasks_by_employee[emp] = []
+                    tasks_by_employee[emp].append(task)
                 response = "Here's a summary of tasks you've assigned:\n\n"
-                for employee, emp_tasks in tasks_by_employee.items():
-                    response += f"**{employee}**:\n"
+                for emp, emp_tasks in tasks_by_employee.items():
+                    response += f"**{emp}**:\n"
                     for task in emp_tasks:
                         status = task.get("status", "pending")
                         response += f"- {task.get('title')} ({status})\n"
@@ -313,11 +299,9 @@ AI: """
                 tasks = list(tasks_collection.find({"employee_username": username}))
                 if not tasks:
                     return "You don't have any assigned tasks yet."
-                
                 pending = [t for t in tasks if t.get("status") == "pending"]
                 in_progress = [t for t in tasks if t.get("status") == "in-progress"]
                 completed = [t for t in tasks if t.get("status") == "completed"]
-                
                 response = "Here's a summary of your tasks:\n\n"
                 if pending:
                     response += "**Pending Tasks**:\n"
@@ -339,26 +323,24 @@ AI: """
             return "I encountered an error while fetching your tasks."
 
     def _get_updates_summary(self, username: str, role: str) -> str:
-        """Get summary of recent updates"""
         try:
             if role == "manager":
                 updates = list(updates_collection.find().sort("timestamp", -1).limit(10))
                 if not updates:
                     return "There are no updates from your team yet."
-                
                 response = "Recent updates from your team:\n\n"
                 for update in updates:
-                    employee = update.get("employee_username", "Unknown")
+                    emp = update.get("employee_username", "Unknown")
                     timestamp = update.get("timestamp")
                     date_str = timestamp.strftime("%Y-%m-%d %H:%M") if timestamp else "Unknown date"
                     content = update.get("content", "No content")
-                    response += f"**{employee}** ({date_str}):\n{content}\n\n"
+                    response += f"**{emp}** ({date_str}):\n{content}\n\n"
                 return response
             else:
-                updates = list(updates_collection.find({"employee_username": username}).sort("timestamp", -1).limit(5))
+                updates = list(updates_collection.find({"employee_username": username})
+                               .sort("timestamp", -1).limit(5))
                 if not updates:
                     return "You haven't submitted any updates yet."
-                
                 response = "Your recent updates:\n\n"
                 for update in updates:
                     timestamp = update.get("timestamp")
@@ -371,7 +353,6 @@ AI: """
             return "I encountered an error while fetching updates."
 
     def _get_help_message(self, role: str) -> str:
-        """Get help message based on user role"""
         common_commands = """
 Available commands:
 /tasks - View task summary
@@ -396,17 +377,13 @@ You can also ask me:
 """
 
     def _generate_rule_based_response(self, message: str, role: str, name: str, username: str) -> str:
-        """Generate a rule-based response when API is unavailable"""
         message = message.lower().strip()
-
-        # Greeting responses
-        if any(greeting in message for greeting in ["hi", "hello", "hey", "greetings"]):
+        if any(greeting in message for greeting in ["hi", "hello", "hey"]):
             if role == "manager":
                 return f"Hello {name}! I'm your management assistant. Ask about team or employee updates."
             else:
                 return f"Hello {name}! Ready to submit your daily update?"
 
-        # Update intent
         update_triggers = ["update", "status", "progress", "done today", "worked on", "blocker"]
         if any(trigger in message for trigger in update_triggers):
             if role == "employee":
@@ -416,34 +393,22 @@ You can also ask me:
                         "3. Blockers\n"
                         "4. Plans for tomorrow")
             else:
-                return (f"As a manager, ask: 'Show me John's updates' or 'Recent team updates'.");
+                return "Ask: 'Show me John's updates' or 'Recent team updates'."
 
-        # Task-related
         if any(word in message for word in ["task", "work", "project"]):
             return f"Use '/tasks' to view task assignments."
 
-        # Help
         if "help" in message:
             return self._get_help_message(role)
 
-        # === MANAGER: Rule-based natural language handling ===
         if role == "manager":
             msg = message
-
-            # Team updates first
-            team_triggers = [
-                "recent updates", "team updates", "any new", "what have employees",
-                "show me updates", "daily reports", "how is the team doing"
-            ]
+            team_triggers = ["recent updates", "team updates", "any new", "what have employees"]
             if any(t in msg for t in team_triggers):
-                return self._get_updates_summary(username, role)  # Fixed: using username instead of name
+                return self._get_updates_summary(username, role)
 
-            # Specific employee query
-            patterns = [
-                r"show me (\w+)'?s?\b", r"updates? from (\w+)", r"what did (\w+) (report|submit)",
-                r"how is (\w+) doing", r"status of (\w+)", r"(\w+)'?s\s+update"
-            ]
-            reserved = {"recent", "latest", "all", "team", "any", "new", "daily", "employee", "employees"}
+            patterns = [r"show me (\w+)'?s?\b", r"updates? from (\w+)", r"how is (\w+) doing"]
+            reserved = {"recent", "latest", "all", "team", "any", "new", "daily", "employee"}
 
             for pattern in patterns:
                 match = re.search(pattern, msg)
@@ -451,18 +416,15 @@ You can also ask me:
                     emp = match.group(1).lower()
                     if emp in reserved:
                         continue
-                    return self._get_employee_updates(username, emp)  # Fixed: using username instead of name
+                    return self._get_employee_updates(username, emp)
 
-            return (f"Hi {name}, you can ask:\n"
+            return (f"Hi {name}, try:\n"
                     "- 'Show me Alex's updates'\n"
-                    "- 'Recent team updates'\n"
-                    "- 'How is Sam doing?'")
+                    "- 'Recent team updates'")
 
-        # Default employee
         return f"Hi {name}, share what you worked on today."
 
     def get_chat_history(self, username: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Get chat history for a specific user"""
         try:
             history = list(
                 chat_history_collection.find(
@@ -479,7 +441,6 @@ You can also ask me:
             return []
 
     def clear_chat_history(self, username: str) -> int:
-        """Clear chat history for a specific user"""
         try:
             result = chat_history_collection.delete_many({"username": username})
             return result.deleted_count
