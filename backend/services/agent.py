@@ -1,4 +1,5 @@
 import os
+from typing import List, Dict, Any, Optional  # Add this import
 from langchain.chains import ConversationChain
 from langchain.memory import ConversationBufferMemory
 from langchain_google_genai import ChatGoogleGenerativeAI
