@@ -11,10 +11,11 @@ users_bp = Blueprint('users', __name__)
 @users_bp.route("/login", methods=["POST", "OPTIONS"])
 def login():
     if request.method == "OPTIONS":
-        # ✅ Manual OPTIONS handling for credentials
         resp = jsonify(success=True)
         resp.headers.add("Access-Control-Allow-Origin", "https://rise-ai-frontend.onrender.com")
         resp.headers.add("Access-Control-Allow-Credentials", "true")
+        resp.headers.add("Access-Control-Allow-Methods", "POST, OPTIONS")
+        resp.headers.add("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
         return resp, 204
 
     try:
