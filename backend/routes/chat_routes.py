@@ -10,7 +10,6 @@ ai_agent = AIAgent()
 
 # Notice we changed from "/" to this explicit path
 @chat_bp.route("", methods=["POST", "OPTIONS"])
-@cross_origin()  # Add explicit CORS for this route
 def chat():
     """Main chat endpoint for AI conversations"""
     if request.method == "OPTIONS":
