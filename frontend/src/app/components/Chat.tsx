@@ -92,7 +92,7 @@ const Chatbot = () => {
       console.log("Sending message:", userMessage, "User email:", user.email);
 
       // Direct fetch approach - bypass the utility function temporarily
-      const response = await fetch("http://localhost:5000/chat", {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

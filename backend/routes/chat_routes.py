@@ -14,7 +14,7 @@ def chat():
     """Main chat endpoint for AI conversations"""
     if request.method == "OPTIONS":
         # Handle preflight request
-        return "", 204  # No content response
+        return "", 204
         
     try:
         data = request.get_json()
