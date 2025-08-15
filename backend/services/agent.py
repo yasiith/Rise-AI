@@ -3,9 +3,6 @@ import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-# --- 🔽 Move imports inside try block to avoid premature import errors ---
-# We'll import them when needed
-
 from db import users_collection, chat_history_collection, tasks_collection, updates_collection
 from dotenv import load_dotenv
 
@@ -18,7 +15,7 @@ print(f"🟩 DEBUG: GEMINI_API_KEY = {os.getenv('GEMINI_API_KEY')}")
 print(f"🟩 DEBUG: PORT = {os.getenv('PORT', '10000')}")
 
 class AIAgent:
-    """AI Agent powered by LangChain and Gemini"""
+    """AI Agent powered by Google Generative AI (Gemini)"""
     
     def __init__(self):
         self.api_key = os.getenv('GEMINI_API_KEY')
@@ -26,20 +23,21 @@ class AIAgent:
         
         if self.api_key:
             try:
-                print("🔄 Initializing LangChain with Gemini...")
+                # Use Google Generative AI directly instead of LangChain
+                print("🔄 Initializing with Google Generative AI...")
+                import google.generativeai as genai
                 
-                # Delayed imports to avoid issues
-                from langchain_google_genai import ChatGoogleGenerativeAI
-                from langchain.chains import ConversationChain
-                from langchain.memory import ConversationBufferMemory
-                from langchain.prompts import PromptTemplate
-
-                # Initialize the LLM
-                self.llm = ChatGoogleGenerativeAI(
-                    model="gemini-pro",
-                    google_api_key=self.api_key,
-                    temperature=0.7,
-                    convert_system_message_to_human=True,
+                # Configure the API
+                genai.configure(api_key=self.api_key)
+                
+                # Initialize the model
+                self.model = genai.GenerativeModel(
+                    model_name="gemini-pro",
+                    generation_config={
+                        "temperature": 0.7,
+                        "top_p": 0.95,
+                        "top_k": 40,
+                    },
                     safety_settings={
                         "HARM_CATEGORY_HARASSMENT": "BLOCK_MEDIUM_AND_ABOVE",
                         "HARM_CATEGORY_HATE_SPEECH": "BLOCK_MEDIUM_AND_ABOVE",
@@ -47,50 +45,16 @@ class AIAgent:
                         "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_MEDIUM_AND_ABOVE",
                     }
                 )
-
-                # Test if LLM can be called
-                from langchain_core.messages import HumanMessage
-                test_response = self.llm.invoke([HumanMessage(content="hi")])
-                print("✅ Gemini LLM test passed:", test_response.content[:50] + "...")
-
-                # Create memory
-                self.memory = ConversationBufferMemory()
-
-                # Define prompt template
-                template = """You are Rise AI, an assistant for a task management system.
-
-Your role is to help users submit daily updates (employees) or review team progress (managers).
-
-Important rules:
-1. NEVER invent or hallucinate updates, tasks, or user data.
-2. If a user wants to submit a daily update, guide them to provide:
-   - Tasks worked on today
-   - Progress made
-   - Blockers or challenges
-   - Plans for tomorrow
-3. For managers, if they ask for recent team updates (e.g., 'recent updates', 'team status'), summarize existing data.
-4. If a manager asks about a specific employee (e.g., 'show me John's updates'), do NOT guess — rely on real data.
-5. Always respond clearly and professionally.
-
-Current conversation:
-{history}
-Human: {input}
-AI: """
-
-                prompt = PromptTemplate(input_variables=["history", "input"], template=template)
-
-                self.conversation = ConversationChain(
-                    llm=self.llm,
-                    memory=self.memory,
-                    prompt=prompt,
-                    verbose=True
-                )
-
-                print("✅ LangChain initialized with Gemini")
+                
+                # Test the model
+                test_response = self.model.generate_content("Hi there, who are you?")
+                print("✅ Google Generative AI test successful:", test_response.text[:50] + "...")
+                
+                print("✅ Google Generative AI initialized successfully")
                 self.use_simulation = False
-
+                
             except Exception as e:
-                print(f"❌ Error initializing LangChain: {e}")
+                print(f"❌ Error initializing Google Generative AI: {e}")
                 import traceback
                 print(traceback.format_exc())
                 print("⚠️ Falling back to rule-based responses")
@@ -206,7 +170,25 @@ AI: """
                     response = self._process_command(message.lower(), username, user_role)
                 else:
                     try:
+                        # Create a system prompt
+                        system_prompt = """You are Rise AI, an assistant for a task management system.
+
+Your role is to help users submit daily updates (employees) or review team progress (managers).
+
+Important rules:
+1. NEVER invent or hallucinate updates, tasks, or user data.
+2. If a user wants to submit a daily update, guide them to provide:
+   - Tasks worked on today
+   - Progress made
+   - Blockers or challenges
+   - Plans for tomorrow
+3. For managers, if they ask for recent team updates (e.g., 'recent updates', 'team status'), summarize existing data.
+4. If a manager asks about a specific employee (e.g., 'show me John's updates'), do NOT guess — rely on real data.
+5. Always respond clearly and professionally."""
+
+                        # Add context to guide AI behavior
                         contextual_message = (
+                            f"{system_prompt}\n\n"
                             f"[USER: {user_name}, ROLE: {user_role}]\n"
                             f"IMPORTANT: If the manager asks for 'recent updates', 'team updates', or similar, "
                             f"fetch and summarize the latest employee updates using real data. "
@@ -214,9 +196,12 @@ AI: """
                             f"Do not invent anything.\n"
                             f"User message: {message}"
                         )
-                        response = self.conversation.predict(input=contextual_message)
+                        
+                        # Using direct Gemini model instead of LangChain
+                        response = self.model.generate_content(contextual_message).text
+                        
                     except Exception as e:
-                        print(f"⚠️ Error with LangChain: {e}")
+                        print(f"⚠️ Error with Google Generative AI: {e}")
                         response = self._generate_rule_based_response(message, user_role, user_name, username)
 
             chat_entry["ai_response"] = response
@@ -229,10 +214,8 @@ AI: """
             print(traceback.format_exc())
             return "I'm having trouble processing your request. Please try again later."
 
-    # Keep the rest of your methods unchanged: _process_command, _get_employee_updates, etc.
-    # (They are already well-written and don't need changes)
-
     def _process_command(self, command: str, username: str, role: str) -> str:
+        """Process special slash commands"""
         if command.startswith("/tasks"):
             return self._get_tasks_summary(username, role)
         elif command.startswith("/updates"):
@@ -250,6 +233,7 @@ AI: """
             return f"Unknown command '{command}'. Type /help for available commands."
 
     def _get_employee_updates(self, manager_username: str, employee_username: str) -> str:
+        """Fetch updates from a specific employee (only if manager has access)"""
         try:
             employee = users_collection.find_one({
                 "username": {"$regex": f"^{employee_username}$", "$options": "i"},
@@ -276,6 +260,7 @@ AI: """
             return f"Sorry, I couldn't retrieve updates for {employee_username} right now."
 
     def _get_tasks_summary(self, username: str, role: str) -> str:
+        """Get summary of tasks for the user"""
         try:
             if role == "manager":
                 tasks = list(tasks_collection.find({"assigned_manager": username}))
@@ -323,6 +308,7 @@ AI: """
             return "I encountered an error while fetching your tasks."
 
     def _get_updates_summary(self, username: str, role: str) -> str:
+        """Get summary of recent updates"""
         try:
             if role == "manager":
                 updates = list(updates_collection.find().sort("timestamp", -1).limit(10))
@@ -353,6 +339,7 @@ AI: """
             return "I encountered an error while fetching updates."
 
     def _get_help_message(self, role: str) -> str:
+        """Get help message based on user role"""
         common_commands = """
 Available commands:
 /tasks - View task summary
@@ -377,6 +364,7 @@ You can also ask me:
 """
 
     def _generate_rule_based_response(self, message: str, role: str, name: str, username: str) -> str:
+        """Generate a rule-based response when API is unavailable"""
         message = message.lower().strip()
         if any(greeting in message for greeting in ["hi", "hello", "hey"]):
             if role == "manager":
@@ -425,6 +413,7 @@ You can also ask me:
         return f"Hi {name}, share what you worked on today."
 
     def get_chat_history(self, username: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get chat history for a specific user"""
         try:
             history = list(
                 chat_history_collection.find(
@@ -441,6 +430,7 @@ You can also ask me:
             return []
 
     def clear_chat_history(self, username: str) -> int:
+        """Clear chat history for a specific user"""
         try:
             result = chat_history_collection.delete_many({"username": username})
             return result.deleted_count

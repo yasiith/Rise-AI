@@ -7,23 +7,12 @@ requests==2.32.4
 Werkzeug==2.0.1
 click==8.0.4
 Jinja2==3.0.3
+flask-cors==3.0.10
 
-# LangChain - Use versions known to work together
-langchain==0.1.17
-langchain-core==0.1.23
-langchain-google-genai==0.0.5
-
-# Pydantic v1 (required for compatibility)
-pydantic==1.10.13
-pydantic-core==2.14.5
-
-# Google AI
+# Google AI directly (no LangChain)
 google-generativeai==0.3.2
 google-api-core==2.25.1
 google-auth==2.40.3
-googleapis-common-protos==1.70.0
 protobuf==4.25.8
-
-# Other dependencies
 tqdm==4.67.1
 numpy==1.26.4
