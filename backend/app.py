@@ -4,8 +4,12 @@ from routes.user_routes import users_bp
 from routes.task_routes import tasks_bp
 from routes.chat_routes import chat_bp
 from routes.updates import updates_bp
-from db import test_connection
+from db import connect_to_mongodb  # Changed this import
 import os
+
+print("🟩 DEBUG: MONGODB_URI =", os.environ.get("MONGODB_URI"))
+print("🟩 DEBUG: GEMINI_API_KEY =", os.environ.get("GEMINI_API_KEY"))
+print("🟩 DEBUG: PORT =", os.environ.get("PORT"))
 
 app = Flask(__name__)
 
@@ -28,8 +32,15 @@ def health_check():
     return {"status": "Rise AI Backend is running!", "version": "1.0.0"}, 200
 
 # Test MongoDB connection on startup
-if not test_connection():
-    print("❌ WARNING: MongoDB connection failed. Check your connection and try again.")
+try:
+    # Attempt to connect to MongoDB
+    db_client = connect_to_mongodb()
+    print("✅ MongoDB connection successful!")
+    print(f"📊 Available databases: {db_client.list_database_names()}")
+    db = db_client.get_database('rise_ai_db')
+    print(f"📁 Collections in rise_ai_db: {db.list_collection_names()}")
+except Exception as e:
+    print(f"❌ WARNING: MongoDB connection failed: {str(e)}")
     # You can uncomment the line below to exit if MongoDB isn't working
     # import sys; sys.exit(1)
 
