@@ -1,3 +1,4 @@
+
 from flask import Flask
 from flask_cors import CORS
 from routes.user_routes import users_bp
@@ -13,12 +14,16 @@ print("🟩 DEBUG: PORT =", os.environ.get("PORT"))
 
 app = Flask(__name__)
 
-# ONLY use the Flask-CORS extension (remove the after_request function)
-CORS(app, 
-     resources={r"/*": {"origins": ["http://localhost:3000", "https://rise-ai-frontend.onrender.com"]}}, 
-     supports_credentials=True,
+# 🔥 Fixed: Remove extra spaces in origin, use exact match
+CORS(app,
+     origins=[
+         "http://localhost:3000",
+         "https://rise-ai-frontend.onrender.com"  # ✅ No trailing spaces!
+     ],
+     supports_credentials=True,  # ← Critical for credentials mode
      allow_headers=["Content-Type", "Authorization", "Accept"],
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+)
 
 # Register blueprints
 app.register_blueprint(users_bp, url_prefix='/users')

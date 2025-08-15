@@ -1,6 +1,4 @@
-/**
- * Base API client for making requests to the backend
- */
+
 
 export const fetchApi = async <T>(url: string, options: RequestInit = {}): Promise<{ success: boolean; data?: T; error?: string }> => {
   try {
