@@ -4,7 +4,7 @@ from routes.user_routes import users_bp
 from routes.task_routes import tasks_bp
 from routes.chat_routes import chat_bp
 from routes.updates import updates_bp
-import db  # Import the whole module instead of specific functions
+import db
 import os
 
 print("🟩 DEBUG: MONGODB_URI =", os.environ.get("MONGODB_URI"))
@@ -13,10 +13,9 @@ print("🟩 DEBUG: PORT =", os.environ.get("PORT"))
 
 app = Flask(__name__)
 
-# Update CORS configuration
-cors_origins = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
+# Update CORS configuration to explicitly include your frontend domain
 CORS(app, 
-     resources={r"/*": {"origins": cors_origins}}, 
+     resources={r"/*": {"origins": ["http://localhost:3000", "https://rise-ai-frontend.onrender.com"]}}, 
      supports_credentials=True,
      allow_headers=["Content-Type", "Authorization", "Accept"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
@@ -31,8 +30,14 @@ app.register_blueprint(updates_bp)
 def health_check():
     return {"status": "Rise AI Backend is running!", "version": "1.0.0"}, 200
 
-# MongoDB connection is likely handled inside the db module itself
-# We don't need to explicitly test it here
+# Add explicit CORS headers to all responses
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', 'https://rise-ai-frontend.onrender.com')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

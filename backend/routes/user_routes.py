@@ -1,3 +1,5 @@
+from flask_cors import cross_origin
+
 from flask import Blueprint, request, jsonify
 from models.user import User
 from db import users_collection, db
@@ -7,8 +9,11 @@ from datetime import datetime
 
 users_bp = Blueprint('users', __name__)
 
-@users_bp.route("/login", methods=["POST"])
+@users_bp.route("/login", methods=["POST", "OPTIONS"])
+@cross_origin()
 def login():
+    if request.method == "OPTIONS":
+        return "", 204
     try:
         data = request.get_json()
         
