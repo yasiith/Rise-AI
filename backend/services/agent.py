@@ -23,34 +23,46 @@ class AIAgent:
         
         if self.api_key:
             try:
-                # Use Google Generative AI directly instead of LangChain
+                # Use Google Generative AI directly with correct implementation
                 print("🔄 Initializing with Google Generative AI...")
                 import google.generativeai as genai
                 
                 # Configure the API
                 genai.configure(api_key=self.api_key)
                 
-                # Initialize the model
+                # List available models to see what's accessible with this API key
+                print("📋 Checking available models...")
+                available_models = genai.list_models()
+                model_names = [model.name for model in available_models]
+                print(f"📋 Available models: {model_names}")
+                
+                # Find a text model we can use
+                text_model = None
+                for model in available_models:
+                    if "generateContent" in model.supported_generation_methods:
+                        text_model = model.name
+                        print(f"✅ Found usable text model: {text_model}")
+                        break
+                
+                if not text_model:
+                    # Fallback to a standard model name if we couldn't detect one
+                    text_model = "gemini-pro"
+                    print(f"⚠️ No text models found, trying default: {text_model}")
+                
+                # Initialize the model with the found model name
                 self.model = genai.GenerativeModel(
-                    model_name="gemini-pro",
+                    model_name=text_model,
                     generation_config={
                         "temperature": 0.7,
                         "top_p": 0.95,
-                        "top_k": 40,
-                    },
-                    safety_settings={
-                        "HARM_CATEGORY_HARASSMENT": "BLOCK_MEDIUM_AND_ABOVE",
-                        "HARM_CATEGORY_HATE_SPEECH": "BLOCK_MEDIUM_AND_ABOVE",
-                        "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_MEDIUM_AND_ABOVE",
-                        "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_MEDIUM_AND_ABOVE",
                     }
                 )
                 
-                # Test the model
-                test_response = self.model.generate_content("Hi there, who are you?")
-                print("✅ Google Generative AI test successful:", test_response.text[:50] + "...")
+                # Simple test
+                print("🧪 Testing model with simple prompt...")
+                test_response = self.model.generate_content("Hello")
+                print(f"✅ Test successful, response: {test_response.text[:30]}...")
                 
-                print("✅ Google Generative AI initialized successfully")
                 self.use_simulation = False
                 
             except Exception as e:
