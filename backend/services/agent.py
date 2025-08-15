@@ -1,10 +1,7 @@
 import os
-from datetime import datetime
-from typing import List, Dict, Any, Optional
-
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains import ConversationChain
 from langchain.memory import ConversationBufferMemory
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import PromptTemplate
 
 from db import users_collection, chat_history_collection, tasks_collection, updates_collection
@@ -28,6 +25,8 @@ class AIAgent:
                     model="gemini-pro",
                     google_api_key=self.api_key,
                     temperature=0.7,
+                    top_p=0.85,
+                    top_k=40,
                     convert_system_message_to_human=True
                 )
                 
