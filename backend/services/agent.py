@@ -23,15 +23,26 @@ class AIAgent:
         
         if self.api_key:
             try:
-                # Initialize LangChain with Gemini model
+                # Initialize LangChain with Gemini model - FIXED IMPLEMENTATION
                 print("🔄 Initializing LangChain with Gemini...")
+                import google.generativeai as genai
+                from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+                
+                # Configure the Google Generative AI
+                genai.configure(api_key=self.api_key)
+                
+                # Create the LLM with explicit model name
                 self.llm = ChatGoogleGenerativeAI(
                     model="gemini-pro",
                     google_api_key=self.api_key,
                     temperature=0.7,
-                    top_p=0.85,
-                    top_k=40,
-                    convert_system_message_to_human=True
+                    convert_system_message_to_human=True,
+                    safety_settings=[
+                        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
+                    ]
                 )
                 
                 # Create memory
