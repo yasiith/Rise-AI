@@ -19,51 +19,37 @@ print(f"🟩 DEBUG: PORT = {os.getenv('PORT', '10000')}")
 class AIAgent:
     """AI Agent powered by Google Generative AI (Gemini 1.5)"""
     
-    def __init__(self):
+    def init(self):
+
         self.api_key = os.getenv('GEMINI_API_KEY')
         self.use_simulation = not self.api_key  # Use rule-based if no API key
         self.model = None
-        
+
         if self.api_key:
             try:
                 print("🔄 Initializing with Google Generative AI...")
                 import google.generativeai as genai
-                
+
                 # Configure API
                 genai.configure(api_key=self.api_key)
-                
+
                 # List available models
                 print("📋 Checking available models...")
                 available_models = genai.list_models()
-                model_names = [m.name for m in available_models]
-                print(f"📋 Available models: {model_names}")
-                
-                # Preferred models (Gemini 1.5 line)
-                preferred_models = [
-                    "gemini-1.5-pro-latest",
-                    "gemini-1.5-pro",
-                    "gemini-1.5-flash-latest",
-                    "gemini-1.5-flash"
-                ]
-                
-                # Find first available model that supports text generation
-                chosen_model = None
-                for model_name in preferred_models:
-                    full_name = f"models/{model_name}"
-                    if full_name in model_names:
-                        # Double-check it supports generateContent
-                        model_info = next((m for m in available_models if m.name == full_name), None)
-                        if model_info and "generateContent" in model_info.supported_generation_methods:
-                            chosen_model = full_name
-                            break
-                
+
+                # Find first model that supports generateContent
+                chosen_model = next(
+                    (m.name for m in available_models if "generateContent" in m.supported_generation_methods),
+                    None
+                )
+
                 if not chosen_model:
-                    print("⚠️ No compatible Gemini model found.")
+                    print("⚠ No compatible Gemini model found.")
                     self.use_simulation = True
                     return
-                
+
                 print(f"✅ Using model: {chosen_model}")
-                
+
                 # Initialize the model
                 self.model = genai.GenerativeModel(
                     model_name=chosen_model,
@@ -80,24 +66,24 @@ class AIAgent:
                         "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_MEDIUM_AND_ABOVE",
                     }
                 )
-                
+
                 # Test the model
                 print("🧪 Testing model with simple prompt...")
                 test_response = self.model.generate_content("Hello")
                 if not test_response.text or len(test_response.text.strip()) == 0:
                     raise ValueError("Empty response from model")
                 print(f"✅ Model test passed: {test_response.text[:50]}...")
-                
+
                 self.use_simulation = False
-                
+
             except Exception as e:
                 print(f"❌ Error initializing Google Generative AI: {e}")
                 import traceback
                 print(traceback.format_exc())
-                print("⚠️ Falling back to rule-based responses")
+                print("⚠ Falling back to rule-based responses")
                 self.use_simulation = True
         else:
-            print("⚠️ No Gemini API key found, using simulation mode")
+            print("⚠ No Gemini API key found, using simulation mode")
 
     def process_message(self, message: str, email: str) -> str:
         """Process a user message and return an AI response"""
