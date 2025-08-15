@@ -1,3 +1,5 @@
+# agent.py
+
 import os
 import re
 from datetime import datetime
@@ -15,53 +17,76 @@ print(f"🟩 DEBUG: GEMINI_API_KEY = {os.getenv('GEMINI_API_KEY')}")
 print(f"🟩 DEBUG: PORT = {os.getenv('PORT', '10000')}")
 
 class AIAgent:
-    """AI Agent powered by Google Generative AI (Gemini)"""
+    """AI Agent powered by Google Generative AI (Gemini 1.5)"""
     
     def __init__(self):
         self.api_key = os.getenv('GEMINI_API_KEY')
-        self.use_simulation = not self.api_key  # Use simulation if no API key is available
+        self.use_simulation = not self.api_key  # Use rule-based if no API key
+        self.model = None
         
         if self.api_key:
             try:
-                # Use Google Generative AI directly with correct implementation
                 print("🔄 Initializing with Google Generative AI...")
                 import google.generativeai as genai
                 
-                # Configure the API
+                # Configure API
                 genai.configure(api_key=self.api_key)
                 
-                # List available models to see what's accessible with this API key
+                # List available models
                 print("📋 Checking available models...")
                 available_models = genai.list_models()
-                model_names = [model.name for model in available_models]
+                model_names = [m.name for m in available_models]
                 print(f"📋 Available models: {model_names}")
                 
-                # Find a text model we can use
-                text_model = None
-                for model in available_models:
-                    if "generateContent" in model.supported_generation_methods:
-                        text_model = model.name
-                        print(f"✅ Found usable text model: {text_model}")
-                        break
+                # Preferred models (Gemini 1.5 line)
+                preferred_models = [
+                    "gemini-1.5-pro-latest",
+                    "gemini-1.5-pro",
+                    "gemini-1.5-flash-latest",
+                    "gemini-1.5-flash"
+                ]
                 
-                if not text_model:
-                    # Fallback to a standard model name if we couldn't detect one
-                    text_model = "gemini-pro"
-                    print(f"⚠️ No text models found, trying default: {text_model}")
+                # Find first available model that supports text generation
+                chosen_model = None
+                for model_name in preferred_models:
+                    full_name = f"models/{model_name}"
+                    if full_name in model_names:
+                        # Double-check it supports generateContent
+                        model_info = next((m for m in available_models if m.name == full_name), None)
+                        if model_info and "generateContent" in model_info.supported_generation_methods:
+                            chosen_model = full_name
+                            break
                 
-                # Initialize the model with the found model name
+                if not chosen_model:
+                    print("⚠️ No compatible Gemini model found.")
+                    self.use_simulation = True
+                    return
+                
+                print(f"✅ Using model: {chosen_model}")
+                
+                # Initialize the model
                 self.model = genai.GenerativeModel(
-                    model_name=text_model,
+                    model_name=chosen_model,
                     generation_config={
                         "temperature": 0.7,
                         "top_p": 0.95,
+                        "top_k": 40,
+                        "max_output_tokens": 1024,
+                    },
+                    safety_settings={
+                        "HARM_CATEGORY_HARASSMENT": "BLOCK_MEDIUM_AND_ABOVE",
+                        "HARM_CATEGORY_HATE_SPEECH": "BLOCK_MEDIUM_AND_ABOVE",
+                        "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_MEDIUM_AND_ABOVE",
+                        "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_MEDIUM_AND_ABOVE",
                     }
                 )
                 
-                # Simple test
+                # Test the model
                 print("🧪 Testing model with simple prompt...")
                 test_response = self.model.generate_content("Hello")
-                print(f"✅ Test successful, response: {test_response.text[:30]}...")
+                if not test_response.text or len(test_response.text.strip()) == 0:
+                    raise ValueError("Empty response from model")
+                print(f"✅ Model test passed: {test_response.text[:50]}...")
                 
                 self.use_simulation = False
                 
@@ -182,38 +207,31 @@ class AIAgent:
                     response = self._process_command(message.lower(), username, user_role)
                 else:
                     try:
-                        # Create a system prompt
                         system_prompt = """You are Rise AI, an assistant for a task management system.
 
-Your role is to help users submit daily updates (employees) or review team progress (managers).
-
-Important rules:
+Rules:
 1. NEVER invent or hallucinate updates, tasks, or user data.
-2. If a user wants to submit a daily update, guide them to provide:
-   - Tasks worked on today
-   - Progress made
-   - Blockers or challenges
-   - Plans for tomorrow
-3. For managers, if they ask for recent team updates (e.g., 'recent updates', 'team status'), summarize existing data.
-4. If a manager asks about a specific employee (e.g., 'show me John's updates'), do NOT guess — rely on real data.
-5. Always respond clearly and professionally."""
+2. For employees: guide them to provide tasks, progress, blockers, and plans.
+3. For managers: summarize real data from the database.
+4. Be clear, professional, and helpful."""
 
-                        # Add context to guide AI behavior
                         contextual_message = (
                             f"{system_prompt}\n\n"
-                            f"[USER: {user_name}, ROLE: {user_role}]\n"
+                            f"[User: {user_name}, Role: {user_role}]\n"
                             f"IMPORTANT: If the manager asks for 'recent updates', 'team updates', or similar, "
-                            f"fetch and summarize the latest employee updates using real data. "
-                            f"If they mention a specific employee by name, only return that employee's updates. "
-                            f"Do not invent anything.\n"
+                            f"summarize actual employee updates from the database. "
+                            f"Do NOT guess or invent anything.\n\n"
                             f"User message: {message}"
                         )
                         
-                        # Using direct Gemini model instead of LangChain
                         response = self.model.generate_content(contextual_message).text
                         
+                        # Safety check
+                        if not response or len(response.strip()) == 0:
+                            raise ValueError("Empty AI response")
+                            
                     except Exception as e:
-                        print(f"⚠️ Error with Google Generative AI: {e}")
+                        print(f"⚠️ Error with Gemini: {e}")
                         response = self._generate_rule_based_response(message, user_role, user_name, username)
 
             chat_entry["ai_response"] = response
@@ -226,8 +244,8 @@ Important rules:
             print(traceback.format_exc())
             return "I'm having trouble processing your request. Please try again later."
 
+    # Keep the rest of your methods unchanged
     def _process_command(self, command: str, username: str, role: str) -> str:
-        """Process special slash commands"""
         if command.startswith("/tasks"):
             return self._get_tasks_summary(username, role)
         elif command.startswith("/updates"):
@@ -245,7 +263,6 @@ Important rules:
             return f"Unknown command '{command}'. Type /help for available commands."
 
     def _get_employee_updates(self, manager_username: str, employee_username: str) -> str:
-        """Fetch updates from a specific employee (only if manager has access)"""
         try:
             employee = users_collection.find_one({
                 "username": {"$regex": f"^{employee_username}$", "$options": "i"},
@@ -272,7 +289,6 @@ Important rules:
             return f"Sorry, I couldn't retrieve updates for {employee_username} right now."
 
     def _get_tasks_summary(self, username: str, role: str) -> str:
-        """Get summary of tasks for the user"""
         try:
             if role == "manager":
                 tasks = list(tasks_collection.find({"assigned_manager": username}))
@@ -320,7 +336,6 @@ Important rules:
             return "I encountered an error while fetching your tasks."
 
     def _get_updates_summary(self, username: str, role: str) -> str:
-        """Get summary of recent updates"""
         try:
             if role == "manager":
                 updates = list(updates_collection.find().sort("timestamp", -1).limit(10))
@@ -351,7 +366,6 @@ Important rules:
             return "I encountered an error while fetching updates."
 
     def _get_help_message(self, role: str) -> str:
-        """Get help message based on user role"""
         common_commands = """
 Available commands:
 /tasks - View task summary
@@ -376,7 +390,6 @@ You can also ask me:
 """
 
     def _generate_rule_based_response(self, message: str, role: str, name: str, username: str) -> str:
-        """Generate a rule-based response when API is unavailable"""
         message = message.lower().strip()
         if any(greeting in message for greeting in ["hi", "hello", "hey"]):
             if role == "manager":
@@ -425,7 +438,6 @@ You can also ask me:
         return f"Hi {name}, share what you worked on today."
 
     def get_chat_history(self, username: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Get chat history for a specific user"""
         try:
             history = list(
                 chat_history_collection.find(
@@ -442,7 +454,6 @@ You can also ask me:
             return []
 
     def clear_chat_history(self, username: str) -> int:
-        """Clear chat history for a specific user"""
         try:
             result = chat_history_collection.delete_many({"username": username})
             return result.deleted_count
